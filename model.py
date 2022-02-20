@@ -32,7 +32,7 @@ def get_activation(activation):
     raise ValueError(f"Unknown Activation {activation}")
 
 
-class PolicyModel(nn.Module):
+class TransitionModel(nn.Module):
 
     @property
     def action_dimension(self) -> int:
@@ -83,7 +83,7 @@ class PolicyEnsemble(object):
         return self.forward(*args, **kwargs)
 
 
-class MLPModel(PolicyModel):
+class MLPModel(TransitionModel):
 
     def __init__(self, input_size, action_dimension, discrete=False, fully_params=None, activation=None):
         super().__init__()

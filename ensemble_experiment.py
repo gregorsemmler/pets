@@ -9,15 +9,21 @@ import torch.nn.functional as F
 from torch import nn
 from torch.optim import Adam
 
+from data import ReplayBuffer
 from model import MLPEnsemble
 
 
-def main():
+def generate_dataset():
     x_low, x_high = -2 * pi, 2 * pi
-    data_size = 1000
+    data_size = 10000
+    train_size = 0.6
+    train_limits = int(data_size * train_size * 0.5)
 
-    x = np.linspace(x_low, x_high, data_size)
-    y = np.sin(x)
+    orig_x = np.linspace(x_low, x_high, data_size)
+    orig_y = np.sin(orig_x)
+
+    x = np.concatenate([orig_x[:train_limits], orig_x[-train_limits:]])
+    no_noise_y = np.sin(x)
 
     noise1 = np.random.randn(*x.shape) * np.sqrt(np.abs(np.sin(1.5 * x + pi / 8)))
     noise2 = np.random.randn(*x.shape)
@@ -25,13 +31,37 @@ def main():
     noise1_strength = 0.15
     noise2_strength = 0.2
 
+    y1 = no_noise_y + noise1_strength * noise1
+    y2 = no_noise_y + noise2_strength * noise1
+    y = y1
+
+    val_ratio = 0.1
+    val_size = int(val_ratio * len(x))
+    shuffled_ids = np.random.permutation(len(x))
+    train_ids = shuffled_ids[:val_size]
+    val_ids = shuffled_ids[val_size:]
+
+    train_buffer = ReplayBuffer(data_size, (1,), (0,))
+    val_buffer = ReplayBuffer(data_size, (1,), (0,))
+
+    for train_id in train_ids:
+        train_buffer.add(x[train_id], 0, y[train_id], 0, False)
+    for val_id in val_ids:
+        val_buffer.add(x[val_id], 0, y[val_id], 0, False)
+
+    return orig_x, orig_y, x, y, train_buffer, val_buffer
+
+
+def main():
+    orig_x, orig_y, x, y, train_buffer, val_buffer = generate_dataset()
+
     print("")
-    plt.figure(figsize=(16, 8))
-    plt.plot(x, y)
-    plt.plot(x, y + noise1_strength * noise1, ".")
-    plt.plot(x, y + noise2_strength * noise2, "o")
+    # plt.figure(figsize=(16, 8))
+    # plt.plot(orig_x, orig_y)
+    # plt.plot(x, y1, ".")
+    # plt.plot(x, y2, "o")
     # plt.plot(x, y, x, y + noise1_strength * noise1, ".", x, y + noise2_strength * noise2, "o")
-    plt.show()
+    # plt.show()
     print("")
 
     pass
@@ -81,5 +111,5 @@ def train(config=None):
 
 
 if __name__ == "__main__":
-    train()
-    # main()
+    # train()
+    main()
