@@ -133,6 +133,7 @@ class MLPEnsemble(PolicyEnsemble):
     def __init__(self, input_size, action_dimension, num_members, discrete=False, fully_params=None, activation=None):
         super().__init__()
 
+        self._num_members = num_members
         self.members = [
             MLPModel(input_size, action_dimension, discrete=discrete, fully_params=fully_params, activation=activation)
             for _ in range(num_members)]
@@ -150,7 +151,12 @@ class MLPEnsemble(PolicyEnsemble):
 
     @property
     def num_members(self) -> int:
-        return len(self.members)
+        return self._num_members
 
     def forward(self, x):
-        return [model(x) for model in self.members]
+        if len(x) == 1:
+            return [model(x) for model in self.members]
+        elif len(x) == self.num_members:
+            return [model(m_in) for model, m_in in zip(x, self.members)]
+        else:
+            raise ValueError("Input needs to have length 1 or equal to number of members.")

@@ -92,12 +92,12 @@ def train(config=None):
     device = torch.device(device_token)
 
     input_dim = 1
-    batch_size = 1
+    batch_size = 128
     num_ensemble_members = 5
     ensemble = MLPEnsemble(input_dim, 1, num_ensemble_members, discrete=discrete).to(device)
     optimizer = Adam(ensemble.parameters())
 
-    model_in = torch.randn(batch_size, input_dim).to(device)
+    model_in = torch.randn(1, batch_size, input_dim).to(device)
     ensemble_out = ensemble(model_in)
 
     target = torch.randn(batch_size, input_dim).to(device)
@@ -109,7 +109,14 @@ def train(config=None):
 
     print("")
 
+    orig_x, orig_y, x, y, train_buffer, val_buffer = generate_dataset()
+
+    for b in train_buffer.batches(batch_size, num_ensemble_members):
+        print("")
+
+    print("")
+
 
 if __name__ == "__main__":
-    # train()
-    main()
+    train()
+    # main()
