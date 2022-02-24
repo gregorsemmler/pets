@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 
 
 class ModelBatch(object):
@@ -7,15 +8,34 @@ class ModelBatch(object):
         self.states = states
         self.actions = actions
         self.next_states = next_states
-        self.values = rewards
+        self.rewards = rewards
         self.dones = dones
 
     def __len__(self):
         return len(self.states)
 
 
-class Preprocessor(object):
-    pass
+class BatchProcessor(object):
+
+    def process(self, batch: ModelBatch):
+        raise NotImplementedError()
+
+
+class SimpleBatchProcessor(BatchProcessor):
+
+    def __init__(self, device, input_normalizer=None, data_type=torch.float32):
+        self.device = device
+        self.input_normalizer = input_normalizer
+        self.data_type = data_type
+
+    def process(self, batch: ModelBatch):
+        states_t = torch.from_numpy(batch.states).type(self.data_type).to(self.device)
+        actions_t = torch.from_numpy(batch.actions).type(self.data_type).to(self.device)
+        next_states_t = torch.from_numpy(batch.next_states).type(self.data_type).to(self.device)
+
+        model_in_t = torch.cat([states_t, actions_t], dim=-1)
+
+        return model_in_t, next_states_t
 
 
 class ReplayBuffer(object):
@@ -60,6 +80,8 @@ class ReplayBuffer(object):
 
             yield model_batches
             start_idx = end_idx
+
+        print("")
 
     def reset(self):
         self.cur_idx = 0

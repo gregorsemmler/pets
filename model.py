@@ -157,6 +157,6 @@ class MLPEnsemble(PolicyEnsemble):
         if len(x) == 1:
             return [model(x) for model in self.members]
         elif len(x) == self.num_members:
-            return [model(m_in) for model, m_in in zip(x, self.members)]
+            return [model(m_in) for model, m_in in zip(self.members, x)]
         else:
             raise ValueError("Input needs to have length 1 or equal to number of members.")
