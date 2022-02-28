@@ -13,7 +13,7 @@ from data import ReplayBuffer, SimpleBatchProcessor
 from model import MLPEnsemble
 
 
-def generate_dataset(data_size=10000):
+def generate_dataset(data_size=10000, val_ratio=0.1):
     x_low, x_high = -2 * pi, 2 * pi
     train_size = 0.8
     train_limits = int(data_size * train_size * 0.5)
@@ -34,14 +34,13 @@ def generate_dataset(data_size=10000):
     y2 = no_noise_y + noise2_strength * noise1
     y = y1
 
-    val_ratio = 0.1
     val_size = int(val_ratio * len(x))
     shuffled_ids = np.random.permutation(len(x))
     train_ids = shuffled_ids[val_size:]
     val_ids = shuffled_ids[:val_size]
 
-    train_buffer = ReplayBuffer(data_size, (1,), (1,))
-    val_buffer = ReplayBuffer(data_size, (1,), (1,))
+    train_buffer = ReplayBuffer(data_size, (1,), (0,))
+    val_buffer = ReplayBuffer(data_size, (1,), (0,))
 
     for train_id in train_ids:
         train_buffer.add(x[train_id], np.array([0]), y[train_id], 0, False)
@@ -70,6 +69,7 @@ def gauss_nll_ensemble_loss(ensemble_out, targets):
     losses = []
     if len(targets) != len(ensemble_out):
         raise ValueError("Model output is not same length as target")
+
     for (mean_model, log_std_model), target in zip(ensemble_out, targets):
         var = torch.exp(2 * log_std_model)
         model_loss = F.gaussian_nll_loss(mean_model, target, var)
@@ -129,6 +129,26 @@ def train(config=None):
 
             print(f"Epoch #{epoch_idx} Batch #{batch_idx} Loss: {total_loss.item()}")
             batch_idx += 1
+
+    print("")
+
+    x_t = torch.from_numpy(orig_x[:, np.newaxis]).type(torch.float32).to(device)
+
+    with torch.no_grad():
+        model_out = ensemble([x_t for _ in range(num_ensemble_members)])
+        means, log_stds = list(zip(*model_out))
+        np_means = [m.cpu().numpy().squeeze() for m in means]
+        np_stds = [np.exp(log_s.cpu().numpy()).squeeze() for log_s in log_stds]
+        print("")
+
+    ensemble_mean = np.stack(np_means).mean(axis=0)
+    ensemble_std = np.stack(np_stds).mean(axis=0)
+
+    plt.figure(figsize=(16, 12), dpi=100)
+    plt.plot(orig_x, orig_y, "b", orig_x, ensemble_mean, "r")
+    plt.plot(x, y, ".g", alpha=0.2)
+    plt.fill_between(orig_x, ensemble_mean - ensemble_std, ensemble_mean + ensemble_std, color="r", alpha=0.2)
+    plt.show()
 
     print("")
 
