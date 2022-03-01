@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
+from matplotlib import cm
 from torch import nn
 from torch.optim import Adam
 
@@ -13,9 +14,9 @@ from data import ReplayBuffer, SimpleBatchProcessor
 from model import MLPEnsemble
 
 
-def generate_dataset(data_size=10000, val_ratio=0.1):
-    x_low, x_high = -2 * pi, 2 * pi
-    train_size = 0.8
+def generate_simple_dataset(x_low=-2 * pi, x_high=2 * pi, data_size=10000, val_ratio=0.1, train_size=0.8,
+                            noise_strength=0.15, noise_type=1):
+
     train_limits = int(data_size * train_size * 0.5)
 
     orig_x = np.linspace(x_low, x_high, data_size)
@@ -27,12 +28,15 @@ def generate_dataset(data_size=10000, val_ratio=0.1):
     noise1 = np.random.randn(*x.shape) * np.sqrt(np.abs(np.sin(1.5 * x + pi / 8)))
     noise2 = np.random.randn(*x.shape)
 
-    noise1_strength = 0.15
-    noise2_strength = 0.2
+    y1 = no_noise_y + noise_strength * noise1
+    y2 = no_noise_y + noise_strength * noise2
 
-    y1 = no_noise_y + noise1_strength * noise1
-    y2 = no_noise_y + noise2_strength * noise1
-    y = y1
+    if noise_type == 1:
+        y = y1
+    elif noise_type == 2:
+        y = y2
+    else:
+        raise ValueError(f"Unknown noise_type '{noise_type}'")
 
     val_size = int(val_ratio * len(x))
     shuffled_ids = np.random.permutation(len(x))
@@ -48,21 +52,6 @@ def generate_dataset(data_size=10000, val_ratio=0.1):
         val_buffer.add(x[val_id], np.array([0]), y[val_id], 0, False)
 
     return orig_x, orig_y, x, y, train_buffer, val_buffer
-
-
-def main():
-    orig_x, orig_y, x, y, train_buffer, val_buffer = generate_dataset()
-
-    print("")
-    # plt.figure(figsize=(16, 8))
-    # plt.plot(orig_x, orig_y)
-    # plt.plot(x, y1, ".")
-    # plt.plot(x, y2, "o")
-    # plt.plot(x, y, x, y + noise1_strength * noise1, ".", x, y + noise2_strength * noise2, "o")
-    # plt.show()
-    print("")
-
-    pass
 
 
 def gauss_nll_ensemble_loss(ensemble_out, targets):
@@ -99,23 +88,14 @@ def train(config=None):
     ensemble = MLPEnsemble(input_dim, 1, num_ensemble_members, discrete=discrete).to(device)
     optimizer = Adam(ensemble.parameters())
 
-    # model_in = torch.randn(1, batch_size, input_dim).to(device)
-    # ensemble_out = ensemble(model_in)
-    #
-    # target = torch.randn(batch_size, input_dim).to(device)
-    # target = [target for _ in range(num_ensemble_members)]
-    #
-    # total_loss = gauss_nll_ensemble_loss(ensemble_out, target)
-    # optimizer.zero_grad()
-    # total_loss.backward()
-    # optimizer.step()
-
     print("")
 
-    orig_x, orig_y, x, y, train_buffer, val_buffer = generate_dataset()
+    orig_x, orig_y, x, y, train_buffer, val_buffer = generate_simple_dataset(train_size=0.7, noise_strength=0.3,
+                                                                             noise_type=1, x_low=-10, x_high=10)
     processor = SimpleBatchProcessor(device)
 
     batch_idx = 0
+    log_frequency = 100
 
     for epoch_idx in range(num_epochs):
         for ensemble_batches in train_buffer.batches(batch_size, num_ensemble_members):
@@ -127,10 +107,18 @@ def train(config=None):
             total_loss.backward()
             optimizer.step()
 
-            print(f"Epoch #{epoch_idx} Batch #{batch_idx} Loss: {total_loss.item()}")
+            if batch_idx % log_frequency == 0:
+                print(f"Epoch #{epoch_idx} Batch #{batch_idx} Loss: {total_loss.item()}")
+
             batch_idx += 1
 
     print("")
+    ensemble_train_data = []
+    for ensemble_id in range(num_ensemble_members):
+        ensemble_rep_ids = sorted(set(train_buffer.batch_indices[ensemble_id]))
+        xs = train_buffer.states[ensemble_rep_ids]
+        ys = train_buffer.next_states[ensemble_rep_ids]
+        ensemble_train_data.append((xs, ys))
 
     x_t = torch.from_numpy(orig_x[:, np.newaxis]).type(torch.float32).to(device)
 
@@ -141,14 +129,44 @@ def train(config=None):
         np_stds = [np.exp(log_s.cpu().numpy()).squeeze() for log_s in log_stds]
         print("")
 
-    ensemble_mean = np.stack(np_means).mean(axis=0)
+    pred_y = np.stack(np_means).mean(axis=0)
+    ensemble_mean_std = np.stack(np_means).std(axis=0)
     ensemble_std = np.stack(np_stds).mean(axis=0)
+    std_average = np.stack([ensemble_mean_std, ensemble_std]).mean(axis=0)
 
     plt.figure(figsize=(16, 12), dpi=100)
-    plt.plot(orig_x, orig_y, "b", orig_x, ensemble_mean, "r")
+    plt.plot(orig_x, orig_y, "b", orig_x, pred_y, "r")
     plt.plot(x, y, ".g", alpha=0.2)
-    plt.fill_between(orig_x, ensemble_mean - ensemble_std, ensemble_mean + ensemble_std, color="r", alpha=0.2)
+    plt.fill_between(orig_x, pred_y - ensemble_std, pred_y + ensemble_std, color="r", alpha=0.2)
+    plt.fill_between(orig_x, pred_y - ensemble_mean_std, pred_y + ensemble_mean_std, color="m", alpha=0.2)
+    plt.fill_between(orig_x, pred_y - std_average, pred_y + std_average, color="k", alpha=0.2)
     plt.show()
+
+    print("")
+    cm_name = "Dark2"
+
+    cmap = cm.get_cmap(cm_name)
+    plt.figure(figsize=(16, 12), dpi=100)
+    plt.plot(orig_x, orig_y, "b")
+
+    e_alpha = 0.2
+    for e_id, ((e_train_x, e_train_y), m, s) in enumerate(zip(ensemble_train_data, np_means, np_stds)):
+        # plt.plot(e_train_x, e_train_y, ".", alpha=e_alpha, color=cmap(e_id))
+        plt.plot(orig_x, m, color=cmap(e_id))
+        plt.fill_between(orig_x, m - s, m + s, alpha=e_alpha, color=cmap(e_id))
+    plt.show()
+
+    print("")
+
+    cmap = cm.get_cmap(cm_name)
+    e_alpha = 0.3
+    for e_id, ((e_train_x, e_train_y), m, s) in enumerate(zip(ensemble_train_data, np_means, np_stds)):
+        plt.figure(figsize=(16, 12), dpi=100)
+        plt.plot(orig_x, orig_y, "b")
+        plt.plot(e_train_x, e_train_y, ".", alpha=e_alpha, color=cmap(e_id))
+        plt.plot(orig_x, m, color=cmap(e_id))
+        plt.fill_between(orig_x, m - s, m + s, alpha=e_alpha, color=cmap(e_id))
+        plt.show()
 
     print("")
 

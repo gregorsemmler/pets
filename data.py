@@ -51,6 +51,7 @@ class ReplayBuffer(object):
 
         self.cur_idx = 0
         self.num_stored = 0
+        self.batch_indices = None
 
     def add(self, state, action, next_state, reward, done):
         self.states[self.cur_idx] = state
@@ -67,22 +68,21 @@ class ReplayBuffer(object):
                           self.dones[ids])
 
     def batches(self, batch_size, num_ensemble_members=1, replace=True):
-        indices = np.empty((num_ensemble_members, self.num_stored), dtype=np.int64)
+        self.batch_indices = np.empty((num_ensemble_members, self.num_stored), dtype=np.int64)
         for idx in range(num_ensemble_members):
-            indices[idx] = np.random.choice(self.num_stored, (self.num_stored,), replace=replace)
+            self.batch_indices[idx] = np.random.choice(self.num_stored, (self.num_stored,), replace=replace)
 
         start_idx = 0
 
         while start_idx < self.num_stored:
             end_idx = min(start_idx + batch_size, self.num_stored)
-            model_batches = [self.batch_from_ids(indices[ensemble_id, start_idx:end_idx]) for ensemble_id in
+            model_batches = [self.batch_from_ids(self.batch_indices[ensemble_id, start_idx:end_idx]) for ensemble_id in
                              range(num_ensemble_members)]
 
             yield model_batches
             start_idx = end_idx
 
-        print("")
-
     def reset(self):
         self.cur_idx = 0
         self.num_stored = 0
+        self.batch_indices = None
