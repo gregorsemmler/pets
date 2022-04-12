@@ -5,8 +5,10 @@ from gym import spaces, logger
 from gym.utils import seeding
 import numpy as np
 
+from envs.common import RewardFuncEnv
 
-class ContinuousCartPoleEnv(gym.Env):
+
+class ContinuousCartPoleEnv(RewardFuncEnv):
     """
     Description:
         A pole is attached by an un-actuated joint to a cart, which moves along
@@ -96,6 +98,25 @@ class ContinuousCartPoleEnv(gym.Env):
         self.np_random, seed = seeding.np_random(seed)
         return [seed]
 
+    def reward(self, state, new_state, done):
+        if not done:
+            reward = 1.0
+        elif self.steps_beyond_done is None:
+            # Pole just fell!
+            self.steps_beyond_done = 0
+            reward = 1.0
+        else:
+            if self.steps_beyond_done == 0:
+                logger.warn(
+                    "You are calling 'step()' even though this "
+                    "environment has already returned done = True. You "
+                    "should always call 'reset()' once you receive 'done = "
+                    "True' -- any further steps are undefined behavior."
+                )
+            self.steps_beyond_done += 1
+            reward = 0.0
+        return reward
+
     def step(self, action):
         err_msg = "%r (%s) invalid" % (action, type(action))
         assert self.action_space.contains(action), err_msg
@@ -126,6 +147,7 @@ class ContinuousCartPoleEnv(gym.Env):
             theta_dot = theta_dot + self.tau * thetaacc
             theta = theta + self.tau * theta_dot
 
+        old_state = self.state
         self.state = (x, x_dot, theta, theta_dot)
 
         done = bool(
@@ -135,22 +157,7 @@ class ContinuousCartPoleEnv(gym.Env):
             or theta > self.theta_threshold_radians
         )
 
-        if not done:
-            reward = 1.0
-        elif self.steps_beyond_done is None:
-            # Pole just fell!
-            self.steps_beyond_done = 0
-            reward = 1.0
-        else:
-            if self.steps_beyond_done == 0:
-                logger.warn(
-                    "You are calling 'step()' even though this "
-                    "environment has already returned done = True. You "
-                    "should always call 'reset()' once you receive 'done = "
-                    "True' -- any further steps are undefined behavior."
-                )
-            self.steps_beyond_done += 1
-            reward = 0.0
+        reward = self.reward(old_state, self.state, done)
 
         return np.array(self.state, dtype=np.float32), reward, done, {}
 
