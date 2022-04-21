@@ -55,6 +55,17 @@ class ContinuousCartPoleEnv(RewardFuncEnv):
         195.0 over 100 consecutive trials.
     """
 
+    def is_done(self, state, new_state) -> bool:
+        (x, x_dot, theta, theta_dot) = new_state
+
+        done = bool(
+            x < -self.x_threshold
+            or x > self.x_threshold
+            or theta < -self.theta_threshold_radians
+            or theta > self.theta_threshold_radians
+        )
+        return done
+
     metadata = {"render.modes": ["human", "rgb_array"], "video.frames_per_second": 50}
 
     def __init__(self):
@@ -106,13 +117,6 @@ class ContinuousCartPoleEnv(RewardFuncEnv):
             self.steps_beyond_done = 0
             reward = 1.0
         else:
-            if self.steps_beyond_done == 0:
-                logger.warn(
-                    "You are calling 'step()' even though this "
-                    "environment has already returned done = True. You "
-                    "should always call 'reset()' once you receive 'done = "
-                    "True' -- any further steps are undefined behavior."
-                )
             self.steps_beyond_done += 1
             reward = 0.0
         return reward
@@ -150,13 +154,7 @@ class ContinuousCartPoleEnv(RewardFuncEnv):
         old_state = self.state
         self.state = (x, x_dot, theta, theta_dot)
 
-        done = bool(
-            x < -self.x_threshold
-            or x > self.x_threshold
-            or theta < -self.theta_threshold_radians
-            or theta > self.theta_threshold_radians
-        )
-
+        done = self.is_done(old_state, self.state)
         reward = self.reward(old_state, self.state, done)
 
         return np.array(self.state, dtype=np.float32), reward, done, {}

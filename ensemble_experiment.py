@@ -12,6 +12,7 @@ from torch.optim import Adam
 
 from data import ReplayBuffer, SimpleBatchProcessor
 from model import MLPEnsemble
+from optimizer import CEMOptimizer
 
 
 def generate_simple_dataset(x_low=-2 * pi, x_high=2 * pi, data_size=10000, val_ratio=0.1, train_size=0.8,
@@ -85,13 +86,13 @@ def train(config=None):
     batch_size = 128
     num_epochs = 100
     num_ensemble_members = 5
-    ensemble = MLPEnsemble(input_dim, 1, num_ensemble_members, discrete=discrete).to(device)
+    ensemble = MLPEnsemble(input_dim, 0, num_ensemble_members, discrete=discrete).to(device)
     optimizer = Adam(ensemble.parameters())
 
     print("")
 
     orig_x, orig_y, x, y, train_buffer, val_buffer = generate_simple_dataset(train_size=0.7, noise_strength=0.3,
-                                                                             noise_type=1, x_low=-10, x_high=10)
+                                                                             noise_type=1)
     processor = SimpleBatchProcessor(device)
 
     batch_idx = 0
@@ -137,9 +138,9 @@ def train(config=None):
     plt.figure(figsize=(16, 12), dpi=100)
     plt.plot(orig_x, orig_y, "b", orig_x, pred_y, "r")
     plt.plot(x, y, ".g", alpha=0.2)
-    plt.fill_between(orig_x, pred_y - ensemble_std, pred_y + ensemble_std, color="r", alpha=0.2)
-    plt.fill_between(orig_x, pred_y - ensemble_mean_std, pred_y + ensemble_mean_std, color="m", alpha=0.2)
-    plt.fill_between(orig_x, pred_y - std_average, pred_y + std_average, color="k", alpha=0.2)
+    plt.fill_between(orig_x, pred_y - std_average, pred_y + std_average, color="r", alpha=0.2)
+    # plt.fill_between(orig_x, pred_y - ensemble_std, pred_y + ensemble_std, color="k", alpha=0.2)
+    # plt.fill_between(orig_x, pred_y - ensemble_mean_std, pred_y + ensemble_mean_std, color="m", alpha=0.2)
     plt.show()
 
     print("")
