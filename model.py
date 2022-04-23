@@ -86,6 +86,12 @@ class PolicyEnsemble(object):
     def num_members(self) -> int:
         raise NotImplementedError()
 
+    def train(self):
+        raise NotImplementedError()
+
+    def eval(self):
+        raise NotImplementedError()
+
     def shuffle_ids(self, batch_size):
         raise NotImplementedError()
 
@@ -163,6 +169,14 @@ class MLPEnsemble(PolicyEnsemble):
         for model in self.members:
             model.to(device)
         return self
+
+    def train(self):
+        for m in self.members:
+            m.train()
+
+    def eval(self):
+        for m in self.members:
+            m.eval()
 
     @property
     def num_members(self) -> int:

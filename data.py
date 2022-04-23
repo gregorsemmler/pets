@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from torch.nn import functional as F
 
 
 class ModelBatch(object):
@@ -40,18 +41,42 @@ class SimpleBatchProcessor(BatchProcessor):
 
 class ReplayBuffer(object):
 
-    def __init__(self, size, state_shape, action_shape, obs_type=np.float32, action_type=np.float32,
+    def __init__(self, size, state_shape, action_shape, state_type=np.float32, action_type=np.float32,
                  reward_type=np.float32):
         self.size = size
-        self.states = np.empty((size, *state_shape), dtype=obs_type)
+        self.states = np.empty((size, *state_shape), dtype=state_type)
         self.actions = np.empty((size, *action_shape), dtype=action_type)
-        self.next_states = np.empty((size, *state_shape), dtype=obs_type)
+        self.next_states = np.empty((size, *state_shape), dtype=state_type)
         self.rewards = np.empty(size, dtype=reward_type)
         self.dones = np.empty(size, dtype=bool)
 
         self.cur_idx = 0
         self.num_stored = 0
         self.batch_indices = None
+
+    @classmethod
+    def from_data(cls, states: np.ndarray, actions: np.ndarray, next_states: np.ndarray, rewards: np.ndarray,
+                  dones: np.ndarray):
+        if len({len(el) for el in [states, actions, next_states, rewards, dones]}) != 1:
+            raise ValueError("Lengths need to be equal.")
+
+        size = len(states)
+        if size == 0:
+            raise ValueError("Need to have at least one element.")
+
+        state_shape = states[0].shape
+        action_shape = actions[0].shape
+
+        if state_shape != next_states[0].shape:
+            raise ValueError("State shapes do not match.")
+
+        if states.dtype != next_states.dtype:
+            raise ValueError("State data types do not match.")
+
+        result = ReplayBuffer(size, state_shape, action_shape, states.dtype, actions.dtype, rewards.dtype)
+        result.cur_idx = size - 1
+        result.num_stored = size
+        return result
 
     def add(self, state, action, next_state, reward, done):
         self.states[self.cur_idx] = state
@@ -82,7 +107,48 @@ class ReplayBuffer(object):
             yield model_batches
             start_idx = end_idx
 
+    def train_val_split(self, val_ratio=0.1, shuffle=True):
+        states_c = self.states[:self.num_stored, ...].copy()
+        actions_c = self.actions[:self.num_stored, ...].copy()
+        next_states_c = self.next_states[:self.num_stored, ...].copy()
+        rewards_c = self.rewards[:self.num_stored, ...].copy()
+        dones_c = self.dones[:self.num_stored, ...].copy()
+
+        val_size = int(val_ratio * self.num_stored)
+
+        if shuffle:
+            permuted_ids = np.random.permutation(self.num_stored)
+            states_c = states_c[permuted_ids]
+            actions_c = actions_c[permuted_ids]
+            next_states_c = next_states_c[permuted_ids]
+            rewards_c = rewards_c[permuted_ids]
+            dones_c = dones_c[permuted_ids]
+
+        val_states, train_states = states_c[:val_size], states_c[val_size:]
+        val_actions, train_actions = actions_c[:val_size], actions_c[val_size:]
+        val_next_states, train_next_states = next_states_c[:val_size], next_states_c[val_size:]
+        val_rewards, train_rewards = rewards_c[:val_size], rewards_c[val_size:]
+        val_dones, train_dones = dones_c[:val_size], dones_c[val_size:]
+
+        train_buffer = ReplayBuffer.from_data(train_states, train_actions, train_next_states, train_rewards, train_dones)
+        val_buffer = ReplayBuffer.from_data(val_states, val_actions, val_next_states, val_rewards, val_dones)
+        return train_buffer, val_buffer
+
     def reset(self):
         self.cur_idx = 0
         self.num_stored = 0
         self.batch_indices = None
+
+
+def gauss_nll_ensemble_loss(ensemble_out, targets):
+    losses = []
+    if len(targets) != len(ensemble_out):
+        raise ValueError("Model output is not same length as target")
+
+    for (mean_model, log_std_model), target in zip(ensemble_out, targets):
+        var = torch.exp(2 * log_std_model)
+        model_loss = F.gaussian_nll_loss(mean_model, target, var)
+        losses.append(model_loss)
+
+    total_loss = torch.stack(losses).mean()
+    return total_loss

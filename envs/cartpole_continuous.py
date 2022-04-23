@@ -157,7 +157,7 @@ class ContinuousCartPoleEnv(RewardFuncEnv):
         done = self.is_done(old_state, self.state)
         reward = self.reward(old_state, self.state, done)
 
-        return np.array(self.state, dtype=np.float32), reward, done, {}
+        return np.array(self.state, dtype=np.float32).squeeze(), reward, done, {}
 
     def reset(self):
         self.state = self.np_random.uniform(low=-0.05, high=0.05, size=(4,))

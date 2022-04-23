@@ -5,14 +5,11 @@ from types import SimpleNamespace
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.nn.functional as F
 from matplotlib import cm
-from torch import nn
 from torch.optim import Adam
 
-from data import ReplayBuffer, SimpleBatchProcessor
+from data import ReplayBuffer, SimpleBatchProcessor, gauss_nll_ensemble_loss
 from model import MLPEnsemble
-from optimizer import CEMOptimizer
 
 
 def generate_simple_dataset(x_low=-2 * pi, x_high=2 * pi, data_size=10000, val_ratio=0.1, train_size=0.8,
@@ -53,20 +50,6 @@ def generate_simple_dataset(x_low=-2 * pi, x_high=2 * pi, data_size=10000, val_r
         val_buffer.add(x[val_id], np.array([0]), y[val_id], 0, False)
 
     return orig_x, orig_y, x, y, train_buffer, val_buffer
-
-
-def gauss_nll_ensemble_loss(ensemble_out, targets):
-    losses = []
-    if len(targets) != len(ensemble_out):
-        raise ValueError("Model output is not same length as target")
-
-    for (mean_model, log_std_model), target in zip(ensemble_out, targets):
-        var = torch.exp(2 * log_std_model)
-        model_loss = F.gaussian_nll_loss(mean_model, target, var)
-        losses.append(model_loss)
-
-    total_loss = torch.stack(losses).mean()
-    return total_loss
 
 
 def train(config=None):

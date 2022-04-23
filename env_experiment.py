@@ -1,11 +1,18 @@
+import logging
+
 import gym
 import numpy as np
 import torch
+import torch.nn.functional as F
 from gym import envs
+from torch.optim import Adam
 
+from data import ReplayBuffer, BatchProcessor, gauss_nll_ensemble_loss, SimpleBatchProcessor
 from envs.cartpole_continuous import ContinuousCartPoleEnv
-from model import DynamicsModel, EnsembleDynamicsModel, MLPEnsemble, EnsembleMode
+from model import DynamicsModel, EnsembleDynamicsModel, MLPEnsemble, EnsembleMode, PolicyEnsemble
 from optimizer import CEMOptimizer
+
+logger = logging.getLogger(__name__)
 
 
 def main():
@@ -27,8 +34,6 @@ def random_agent_evaluation():
 
     env_state = env.reset()
     actions = np.clip(np.random.randn(batch_size, horizon, action_dim), -1, 1).astype(np.float32)
-    # TODO test
-    # actions = np.tile(np.linspace(-1, 1, batch_size)[:, np.newaxis], (1, horizon))[..., np.newaxis].astype(np.float32)
     ensemble = MLPEnsemble(state_dim, action_dim, num_ensemble_members, ensemble_mode=EnsembleMode.SHUFFLED_MEMBER).to(
         device)
     dynamics_model = EnsembleDynamicsModel(ensemble, env, device)
@@ -57,18 +62,159 @@ def dynamics_model_evaluation(initial_state, dynamics_model: DynamicsModel, hori
     return average_rewards
 
 
-def cem_experiment():
+def play_and_add_to_buffer(env, policy, replay_buffer: ReplayBuffer, num_time_steps=200):
+    i = 0
+
+    play_finished = False
+    while not play_finished:
+        if i >= num_time_steps:
+            break
+
+        state = env.reset()
+        done = False
+
+        while not done:
+            action = policy(state)
+            new_state, reward, done, info = env.step(action)
+
+            replay_buffer.add(state, action, new_state, reward, done)
+            state = new_state
+
+            i += 1
+
+            if i >= num_time_steps:
+                play_finished = True
+                break
+
+
+def train_on_replay_buffer(ensemble: PolicyEnsemble, replay_buffer: ReplayBuffer, optimizer, processor: BatchProcessor,
+                           batch_size, num_epochs, val_ratio=0.1, shuffle=True, log_frequency=100):
+    train_buffer, val_buffer = replay_buffer.train_val_split(val_ratio=val_ratio, shuffle=shuffle)
+
+    prev_ensemble_mode = ensemble.ensemble_mode
+    ensemble.ensemble_mode = EnsembleMode.ALL_MEMBERS
+
+    train_batch_idx = 0
+    val_batch_idx = 0
+    train_batch_losses, val_batch_losses = [], []
+    train_epoch_losses, val_epoch_losses = [], []
+
+    for epoch_idx in range(num_epochs):
+
+        ensemble.train()
+        train_epoch_loss = 0.0
+        train_batch_count = 0
+        for ensemble_batches in train_buffer.batches(batch_size, ensemble.num_members):
+            model_in, target_out = list(zip(*[processor.process(b) for b in ensemble_batches]))
+            model_out = ensemble(model_in)
+
+            total_loss = gauss_nll_ensemble_loss(model_out, target_out)
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
+            loss_value = total_loss.item()
+
+            if train_batch_idx % log_frequency == 0:
+                print(f"Train Epoch #{epoch_idx} Batch #{train_batch_idx} Loss: {loss_value}")
+
+            train_epoch_loss += loss_value
+            train_batch_losses.append(loss_value)
+            train_batch_idx += 1
+            train_batch_count += 1
+
+        train_epoch_loss = 0.0 if train_batch_count == 0 else train_epoch_loss / train_batch_count
+        train_epoch_losses.append(train_epoch_loss)
+
+        ensemble.eval()
+        val_epoch_loss = 0.0
+        val_batch_count = 0
+        for ensemble_batches in val_buffer.batches(batch_size, ensemble.num_members):
+            model_in, target_out = list(zip(*[processor.process(b) for b in ensemble_batches]))
+            with torch.no_grad():
+                model_out = ensemble(model_in)
+
+            total_loss = gauss_nll_ensemble_loss(model_out, target_out)
+            loss_value = total_loss.item()
+
+            if val_batch_idx % log_frequency == 0:
+                print(f"Val Epoch #{epoch_idx} Batch #{val_batch_idx} Loss: {loss_value}")
+
+            val_epoch_loss += loss_value
+            val_batch_losses.append(loss_value)
+            val_batch_idx += 1
+            val_batch_count += 1
+
+        val_epoch_loss = 0.0 if val_batch_count == 0 else val_epoch_loss / val_batch_count
+        val_epoch_losses.append(val_epoch_loss)
+
+    ensemble.ensemble_mode = prev_ensemble_mode
+
+    return train_batch_losses, val_batch_losses, train_epoch_losses, val_epoch_losses
+
+
+def run_pets():
+    env = ContinuousCartPoleEnv()
+    state = env.reset()
+    state_shape = state.shape
+    action_shape = env.action_space.sample().shape
+    device_token = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device_token)
+
+    if len(state_shape) != 1 or len(action_shape) != 1:
+        raise ValueError("State and action shape need to have dimension 1")
+
+    state_dim = state_shape[0]
+    action_dim = action_shape[0]
+
+    num_trials = 10
+
+    replay_buffer_size = 3000
+    replay_buffer = ReplayBuffer(replay_buffer_size, state_shape,  action_shape)
+
+    # Train parameters
+    train_batch_size = 128
+    train_epochs = 50
+    train_lr = 1e-3
+    l2_regularization = 0
+    val_ratio = 0.1
+    shuffle = True
+    log_frequency = 100
+
+    num_random_steps = 200
+    # Fill replay buffer with initial data from random actions
+    play_and_add_to_buffer(env, lambda x: env.action_space.sample(), replay_buffer, num_random_steps)
+
+    horizon = 10
+
+    num_ensemble_members = 5
+    ensemble = MLPEnsemble(state_dim, action_dim, num_ensemble_members, ensemble_mode=EnsembleMode.SHUFFLED_MEMBER).to(
+        device)
+    optimizer = Adam(ensemble.parameters(), lr=train_lr, weight_decay=l2_regularization)
+    processor = SimpleBatchProcessor(device)  # TODO add normalization
+    dynamics_model = EnsembleDynamicsModel(ensemble, env, device)
+
+    # CEM Options
     num_samples = 100
-    elite_size = 20
+    elite_size = 10
     horizon = 1
     num_iterations = 100
     lower_bound = -2
     upper_bound = 2
     alpha = 0.1
-    cem_opt = CEMOptimizer(num_samples, elite_size, horizon, num_iterations, lower_bound, upper_bound, alpha, )
+
+    cem_opt = CEMOptimizer(num_samples, elite_size, horizon, num_iterations, lower_bound, upper_bound, alpha, None)
+
+    for trial_idx in range(num_trials):
+        train_on_replay_buffer(ensemble, replay_buffer, optimizer, processor, train_batch_size, train_epochs,
+                               val_ratio=val_ratio, shuffle=shuffle, log_frequency=log_frequency)
+
+        cem_opt.optimize()
+
+        pass
     pass
 
 
 if __name__ == "__main__":
     # main()
-    random_agent_evaluation()
+    # random_agent_evaluation()
+    run_pets()
