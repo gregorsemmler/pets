@@ -16,6 +16,24 @@ class ModelBatch(object):
         return len(self.states)
 
 
+class StandardNormalizer(object):
+
+    def __init__(self, data: np.ndarray, device, axis=0, dtype=torch.float32, eps=1e-8):
+        mean, std = data.mean(axis=axis), data.std(axis=axis)
+        self.mean = torch.tensor(mean).to(device).type(dtype)
+        self.std = torch.tensor(std).to(device).to(dtype)
+
+        self.device = device
+        self.dtype = dtype
+        self.eps = eps
+
+        if self.eps is not None:
+            self.std[self.std < self.eps] = 1.0
+
+    def normalize(self, x: torch.tensor):
+        return (x - self.mean) / self.std
+
+
 class BatchProcessor(object):
 
     def process(self, batch: ModelBatch):
@@ -24,9 +42,9 @@ class BatchProcessor(object):
 
 class SimpleBatchProcessor(BatchProcessor):
 
-    def __init__(self, device, input_normalizer=None, data_type=torch.float32):
+    def __init__(self, device, normalizer=None, data_type=torch.float32):
         self.device = device
-        self.input_normalizer = input_normalizer
+        self.normalizer = normalizer
         self.data_type = data_type
 
     def process(self, batch: ModelBatch):
@@ -74,6 +92,11 @@ class ReplayBuffer(object):
             raise ValueError("State data types do not match.")
 
         result = ReplayBuffer(size, state_shape, action_shape, states.dtype, actions.dtype, rewards.dtype)
+        result.states = states
+        result.actions = actions
+        result.next_states = next_states
+        result.rewards = rewards
+        result.dones = dones
         result.cur_idx = size - 1
         result.num_stored = size
         return result

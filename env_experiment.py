@@ -184,8 +184,6 @@ def run_pets():
     # Fill replay buffer with initial data from random actions
     play_and_add_to_buffer(env, lambda x: env.action_space.sample(), replay_buffer, num_random_steps)
 
-    horizon = 10
-
     num_ensemble_members = 5
     ensemble = MLPEnsemble(state_dim, action_dim, num_ensemble_members, ensemble_mode=EnsembleMode.SHUFFLED_MEMBER).to(
         device)
@@ -196,11 +194,13 @@ def run_pets():
     # CEM Options
     num_samples = 100
     elite_size = 10
-    horizon = 1
+    horizon = 10
     num_iterations = 100
-    lower_bound = -2
-    upper_bound = 2
+    lower_bound, upper_bound = env.action_space.low, env.action_space.high
     alpha = 0.1
+
+    lower_bound = torch.tensor(np.tile(lower_bound, (horizon, 1)))
+    upper_bound = torch.tensor(np.tile(upper_bound, (horizon, 1)))
 
     cem_opt = CEMOptimizer(num_samples, elite_size, horizon, num_iterations, lower_bound, upper_bound, alpha, None)
 

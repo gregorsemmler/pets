@@ -11,8 +11,8 @@ class CEMOptimizer(object):
     [3] K. Chua, et al. Deep reinforcement learning in a handful of trials using probabilistic dynamics models. Advances in neural information processing systems, 2018
     """
 
-    def __init__(self, num_samples, elite_size, horizon, num_iterations, lower_bound, upper_bound, alpha,
-                 cost_function):
+    def __init__(self, num_samples, elite_size, horizon, num_iterations, lower_bound: torch.tensor,
+                 upper_bound: torch.tensor, alpha, cost_function):
         self.num_samples = num_samples
         self.elite_size = elite_size
         self.horizon = horizon
@@ -23,8 +23,8 @@ class CEMOptimizer(object):
         self.cost_function = cost_function
 
     def optimize(self, initial_mean=None):
-        mean = initial_mean if initial_mean is not None else torch.zeros_like(self.upper_bound)
-        # https://github.com/kchua/handful-of-trials/blob/77fd8802cc30b7683f0227c90527b5414c0df34c/dmbrl/controllers/MPC.py#L132
+        # https://github.com/kchua/handful-of-trials/blob/77fd8802cc30b7683f0227c90527b5414c0df34c/dmbrl/controllers/MPC.py#L131-L132
+        mean = initial_mean if initial_mean is not None else (self.lower_bound + self.upper_bound) / 2
         var = (self.upper_bound - self.lower_bound) ** 2 / 16
         best_solution = torch.empty_like(mean)
         best_value = -float("-inf")
