@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from gym import envs
 from torch.optim import Adam
 
-from data import ReplayBuffer, BatchProcessor, gauss_nll_ensemble_loss, SimpleBatchProcessor
+from data import ReplayBuffer, BatchProcessor, gauss_nll_ensemble_loss, SimpleBatchProcessor, StandardNormalizer
 from envs.cartpole_continuous import ContinuousCartPoleEnv
 from model import DynamicsModel, EnsembleDynamicsModel, MLPEnsemble, EnsembleMode, PolicyEnsemble
 from optimizer import CEMOptimizer
@@ -87,10 +87,16 @@ def play_and_add_to_buffer(env, policy, replay_buffer: ReplayBuffer, num_time_st
                 break
 
 
-def train_on_replay_buffer(ensemble: PolicyEnsemble, replay_buffer: ReplayBuffer, optimizer, processor: BatchProcessor,
-                           batch_size, num_epochs, val_ratio=0.1, shuffle=True, log_frequency=100):
-    train_buffer, val_buffer = replay_buffer.train_val_split(val_ratio=val_ratio, shuffle=shuffle)
+def get_normalizer_for_replay_buffer(replay_buffer: ReplayBuffer, device, dtype=torch.float32,
+                                     eps=1e-8) -> StandardNormalizer:
+    states, actions = replay_buffer.states, replay_buffer.actions
+    normalizer_data = np.concatenate([states, actions], axis=-1)
+    result = StandardNormalizer(normalizer_data, device, dtype=dtype, eps=eps)
+    return result
 
+
+def train_on_replay_buffer(ensemble: PolicyEnsemble, train_buffer: ReplayBuffer, val_buffer: ReplayBuffer, optimizer,
+                           processor: BatchProcessor, batch_size, num_epochs, log_frequency=100):
     prev_ensemble_mode = ensemble.ensemble_mode
     ensemble.ensemble_mode = EnsembleMode.ALL_MEMBERS
 
@@ -99,11 +105,13 @@ def train_on_replay_buffer(ensemble: PolicyEnsemble, replay_buffer: ReplayBuffer
     train_batch_losses, val_batch_losses = [], []
     train_epoch_losses, val_epoch_losses = [], []
 
+    logger.info(f"Training for {num_epochs} epochs.")
     for epoch_idx in range(num_epochs):
 
         ensemble.train()
         train_epoch_loss = 0.0
         train_batch_count = 0
+        logger.info(f"Training Epoch {epoch_idx}.")
         for ensemble_batches in train_buffer.batches(batch_size, ensemble.num_members):
             model_in, target_out = list(zip(*[processor.process(b) for b in ensemble_batches]))
             model_out = ensemble(model_in)
@@ -115,7 +123,7 @@ def train_on_replay_buffer(ensemble: PolicyEnsemble, replay_buffer: ReplayBuffer
             loss_value = total_loss.item()
 
             if train_batch_idx % log_frequency == 0:
-                print(f"Train Epoch #{epoch_idx} Batch #{train_batch_idx} Loss: {loss_value}")
+                logger.info(f"Train Epoch #{epoch_idx} Batch #{train_batch_idx} Loss: {loss_value}")
 
             train_epoch_loss += loss_value
             train_batch_losses.append(loss_value)
@@ -125,6 +133,7 @@ def train_on_replay_buffer(ensemble: PolicyEnsemble, replay_buffer: ReplayBuffer
         train_epoch_loss = 0.0 if train_batch_count == 0 else train_epoch_loss / train_batch_count
         train_epoch_losses.append(train_epoch_loss)
 
+        logger.info(f"Validation Epoch {epoch_idx}.")
         ensemble.eval()
         val_epoch_loss = 0.0
         val_batch_count = 0
@@ -137,7 +146,7 @@ def train_on_replay_buffer(ensemble: PolicyEnsemble, replay_buffer: ReplayBuffer
             loss_value = total_loss.item()
 
             if val_batch_idx % log_frequency == 0:
-                print(f"Val Epoch #{epoch_idx} Batch #{val_batch_idx} Loss: {loss_value}")
+                logger.info(f"Val Epoch #{epoch_idx} Batch #{val_batch_idx} Loss: {loss_value}")
 
             val_epoch_loss += loss_value
             val_batch_losses.append(loss_value)
@@ -153,6 +162,8 @@ def train_on_replay_buffer(ensemble: PolicyEnsemble, replay_buffer: ReplayBuffer
 
 
 def run_pets():
+    logging.basicConfig(level=logging.INFO)
+
     env = ContinuousCartPoleEnv()
     state = env.reset()
     state_shape = state.shape
@@ -178,7 +189,7 @@ def run_pets():
     l2_regularization = 0
     val_ratio = 0.1
     shuffle = True
-    log_frequency = 100
+    log_frequency = 1
 
     num_random_steps = 200
     # Fill replay buffer with initial data from random actions
@@ -188,7 +199,6 @@ def run_pets():
     ensemble = MLPEnsemble(state_dim, action_dim, num_ensemble_members, ensemble_mode=EnsembleMode.SHUFFLED_MEMBER).to(
         device)
     optimizer = Adam(ensemble.parameters(), lr=train_lr, weight_decay=l2_regularization)
-    processor = SimpleBatchProcessor(device)  # TODO add normalization
     dynamics_model = EnsembleDynamicsModel(ensemble, env, device)
 
     # CEM Options
@@ -196,20 +206,39 @@ def run_pets():
     elite_size = 10
     horizon = 10
     num_iterations = 100
-    lower_bound, upper_bound = env.action_space.low, env.action_space.high
+    lower_bound_np, upper_bound_np = env.action_space.low, env.action_space.high
     alpha = 0.1
+    num_particles = 15
 
-    lower_bound = torch.tensor(np.tile(lower_bound, (horizon, 1)))
-    upper_bound = torch.tensor(np.tile(upper_bound, (horizon, 1)))
+    lower_bound = torch.tensor(np.tile(lower_bound_np, (horizon, 1)))
+    upper_bound = torch.tensor(np.tile(upper_bound_np, (horizon, 1)))
 
-    cem_opt = CEMOptimizer(num_samples, elite_size, horizon, num_iterations, lower_bound, upper_bound, alpha, None)
-
+    solution = (lower_bound + upper_bound) / 2
     for trial_idx in range(num_trials):
-        train_on_replay_buffer(ensemble, replay_buffer, optimizer, processor, train_batch_size, train_epochs,
-                               val_ratio=val_ratio, shuffle=shuffle, log_frequency=log_frequency)
+        ensemble.shuffle_ids(num_samples * num_particles)  # Once per Trial for TSInf
 
-        cem_opt.optimize()
+        train_buffer, val_buffer = replay_buffer.train_val_split(val_ratio=val_ratio, shuffle=shuffle)
+        normalizer = get_normalizer_for_replay_buffer(train_buffer, device)
+        processor = SimpleBatchProcessor(device, normalizer=normalizer)
+        dynamics_model.normalizer = normalizer
 
+        def eval_func(actions):
+            return torch.tensor(dynamics_model_evaluation(state, dynamics_model, actions, num_particles))
+
+        cem_opt = CEMOptimizer(num_samples, elite_size, horizon, num_iterations, lower_bound, upper_bound, alpha,
+                               eval_func)
+
+        train_on_replay_buffer(ensemble, train_buffer, val_buffer, optimizer, processor, train_batch_size, train_epochs,
+                               log_frequency=log_frequency)
+
+        solution = cem_opt.optimize(solution)
+        print("")
+        action = solution.detach().cpu().numpy().squeeze()[0]
+
+        action = np.clip(action, lower_bound_np, upper_bound_np)
+        state = env.step(action)
+
+        print("")
         pass
     pass
 

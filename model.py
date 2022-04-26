@@ -1,7 +1,7 @@
 import logging
 import math
 from enum import Enum
-from typing import Tuple, Any, Dict
+from typing import Tuple, Any, Dict, Optional
 
 import numpy as np
 import torch
@@ -10,6 +10,7 @@ from torch import nn
 from torch.distributions import Categorical, Normal
 
 from common import clip_mean_std
+from data import Normalizer
 from envs.common import RewardFuncEnv
 
 logger = logging.getLogger(__name__)
@@ -240,9 +241,11 @@ class DynamicsModel(object):
 
 class EnsembleDynamicsModel(DynamicsModel):
 
-    def __init__(self, ensemble, env: RewardFuncEnv, device, data_type=torch.float32):
+    def __init__(self, ensemble, env: RewardFuncEnv, device, normalizer: Optional[Normalizer] = None,
+                 data_type=torch.float32):
         self.ensemble = ensemble
         self.env = env
+        self.normalizer = normalizer
         self.device = device
         self.data_type = data_type
 
@@ -251,6 +254,9 @@ class EnsembleDynamicsModel(DynamicsModel):
         actions_t = torch.from_numpy(actions).type(self.data_type).to(self.device)
 
         model_in_t = torch.cat([states_t, actions_t], dim=-1)
+
+        if self.normalizer is not None:
+            model_in_t = self.normalizer.normalize(model_in_t)
 
         means, log_stds = self.ensemble(model_in_t)
         std_devs = torch.exp(log_stds)

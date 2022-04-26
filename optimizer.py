@@ -27,7 +27,7 @@ class CEMOptimizer(object):
         mean = initial_mean if initial_mean is not None else (self.lower_bound + self.upper_bound) / 2
         var = (self.upper_bound - self.lower_bound) ** 2 / 16
         best_solution = torch.empty_like(mean)
-        best_value = -float("-inf")
+        best_value = float("-inf")
 
         # https://github.com/kchua/handful-of-trials/blob/77fd8802cc30b7683f0227c90527b5414c0df34c/dmbrl/misc/optimizers/cem.py#L122
         lb_dist, ub_dist = mean - self.lower_bound, self.upper_bound - mean
@@ -35,7 +35,7 @@ class CEMOptimizer(object):
 
         for _ in range(self.num_iterations):
             sampled = torch.zeros((self.num_samples,) + mean.shape)
-            sampled = torch.nn.init.trunc_normal_(sampled, mean) * torch.sqrt(constrained_var) + mean
+            sampled = torch.nn.init.trunc_normal_(sampled, mean[0]) * torch.sqrt(constrained_var) + mean
 
             costs = self.cost_function(sampled)
             best_values, best_indices = costs.topk(self.elite_size)

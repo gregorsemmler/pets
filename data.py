@@ -1,3 +1,5 @@
+from typing import Optional
+
 import numpy as np
 import torch
 from torch.nn import functional as F
@@ -16,7 +18,13 @@ class ModelBatch(object):
         return len(self.states)
 
 
-class StandardNormalizer(object):
+class Normalizer(object):
+
+    def normalize(self, x: torch.tensor) -> torch.tensor:
+        raise NotImplementedError()
+
+
+class StandardNormalizer(Normalizer):
 
     def __init__(self, data: np.ndarray, device, axis=0, dtype=torch.float32, eps=1e-8):
         mean, std = data.mean(axis=axis), data.std(axis=axis)
@@ -30,7 +38,7 @@ class StandardNormalizer(object):
         if self.eps is not None:
             self.std[self.std < self.eps] = 1.0
 
-    def normalize(self, x: torch.tensor):
+    def normalize(self, x: torch.tensor) -> torch.tensor:
         return (x - self.mean) / self.std
 
 
@@ -42,7 +50,7 @@ class BatchProcessor(object):
 
 class SimpleBatchProcessor(BatchProcessor):
 
-    def __init__(self, device, normalizer=None, data_type=torch.float32):
+    def __init__(self, device, normalizer: Optional[Normalizer] = None, data_type=torch.float32):
         self.device = device
         self.normalizer = normalizer
         self.data_type = data_type
@@ -53,6 +61,9 @@ class SimpleBatchProcessor(BatchProcessor):
         next_states_t = torch.from_numpy(batch.next_states).type(self.data_type).to(self.device)
 
         model_in_t = torch.cat([states_t, actions_t], dim=-1)
+
+        if self.normalizer is not None:
+            model_in_t = self.normalizer.normalize(model_in_t)
 
         return model_in_t, next_states_t
 
