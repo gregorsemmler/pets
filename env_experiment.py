@@ -97,7 +97,7 @@ def get_normalizer_for_replay_buffer(replay_buffer: ReplayBuffer, device, dtype=
 
 
 def train_on_replay_buffer(ensemble: PolicyEnsemble, train_buffer: ReplayBuffer, val_buffer: ReplayBuffer, optimizer,
-                           processor: BatchProcessor, batch_size, num_epochs, log_frequency=100):
+                           processor: BatchProcessor, batch_size, num_epochs, log_frequency=100, trial_id=None):
     prev_ensemble_mode = ensemble.ensemble_mode
     ensemble.ensemble_mode = EnsembleMode.ALL_MEMBERS
 
@@ -106,13 +106,14 @@ def train_on_replay_buffer(ensemble: PolicyEnsemble, train_buffer: ReplayBuffer,
     train_batch_losses, val_batch_losses = [], []
     train_epoch_losses, val_epoch_losses = [], []
 
-    logger.info(f"Training for {num_epochs} epochs. (TrainSize / ValSize): ({len(train_buffer)}/{len(val_buffer)})")
+    trial_id = "" if trial_id is None else f"Trial {trial_id}: "
+    logger.info(f"{trial_id}Training for {num_epochs} epochs. (TrainSize / ValSize): ({len(train_buffer)}/{len(val_buffer)})")
     for epoch_idx in range(num_epochs):
 
         ensemble.train()
         train_epoch_loss = 0.0
         train_batch_count = 0
-        logger.info(f"Training Epoch {epoch_idx}.")
+        logger.info(f"{trial_id}Training Epoch {epoch_idx}.")
         for ensemble_batches in train_buffer.batches(batch_size, ensemble.num_members):
             model_in, target_out = list(zip(*[processor.process(b) for b in ensemble_batches]))
             model_out = ensemble(model_in)
@@ -124,7 +125,7 @@ def train_on_replay_buffer(ensemble: PolicyEnsemble, train_buffer: ReplayBuffer,
             loss_value = total_loss.item()
 
             if train_batch_idx % log_frequency == 0:
-                logger.info(f"Train Epoch #{epoch_idx} Batch #{train_batch_idx} Loss: {loss_value}")
+                logger.info(f"{trial_id}Train Epoch #{epoch_idx} Batch #{train_batch_idx} Loss: {loss_value}")
 
             train_epoch_loss += loss_value
             train_batch_losses.append(loss_value)
@@ -134,7 +135,7 @@ def train_on_replay_buffer(ensemble: PolicyEnsemble, train_buffer: ReplayBuffer,
         train_epoch_loss = 0.0 if train_batch_count == 0 else train_epoch_loss / train_batch_count
         train_epoch_losses.append(train_epoch_loss)
 
-        logger.info(f"Validation Epoch {epoch_idx}.")
+        logger.info(f"{trial_id}Validation Epoch {epoch_idx}.")
         ensemble.eval()
         val_epoch_loss = 0.0
         val_batch_count = 0
@@ -147,7 +148,7 @@ def train_on_replay_buffer(ensemble: PolicyEnsemble, train_buffer: ReplayBuffer,
             loss_value = total_loss.item()
 
             if val_batch_idx % log_frequency == 0:
-                logger.info(f"Val Epoch #{epoch_idx} Batch #{val_batch_idx} Loss: {loss_value}")
+                logger.info(f"{trial_id}Val Epoch #{epoch_idx} Batch #{val_batch_idx} Loss: {loss_value}")
 
             val_epoch_loss += loss_value
             val_batch_losses.append(loss_value)
@@ -190,7 +191,7 @@ def run_pets():
     l2_regularization = 0
     val_ratio = 0.1
     shuffle = True
-    log_frequency = 1
+    train_log_frequency = 20
 
     num_random_steps = 1000
     # Fill replay buffer with initial data from random actions
@@ -237,7 +238,7 @@ def run_pets():
                                eval_func)
 
         train_on_replay_buffer(ensemble, train_buffer, val_buffer, optimizer, processor, train_batch_size, train_epochs,
-                               log_frequency=log_frequency)
+                               log_frequency=train_log_frequency, trial_id=trial_idx)
         trial_length = 0
         trial_return = 0.0
 
