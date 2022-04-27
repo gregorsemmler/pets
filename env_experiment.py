@@ -179,8 +179,6 @@ def run_pets():
     state_dim = state_shape[0]
     action_dim = action_shape[0]
 
-    num_trials = 10
-
     replay_buffer_size = 3000
     replay_buffer = ReplayBuffer(replay_buffer_size, state_shape,  action_shape)
 
@@ -221,7 +219,11 @@ def run_pets():
 
     trial_lengths = []
     trial_returns = []
+    best_trial_return = float("-inf")
+    best_trial_length = 0
+    best_trial_id = None
 
+    num_trials = 100
     for trial_idx in range(num_trials):
         logger.info(f"Starting trial {trial_idx}.")
         ensemble.shuffle_ids(num_samples * num_particles)  # Once per Trial for TSInf
@@ -263,9 +265,16 @@ def run_pets():
                 trial_lengths.append(trial_length)
                 trial_returns.append(trial_return)
                 logger.info(f"Trial {trial_idx} over after {trial_length} steps with total return {trial_return}.")
+
+                if trial_return > best_trial_return:
+                    logger.info("New best trial.")
+                    best_trial_return = trial_return
+                    best_trial_length = trial_length
+                    best_trial_id = trial_idx
                 break
 
-    print(f"{num_trials} trials done.")
+    logger.info(f"{num_trials} trials done.")
+    logger.info(f"Best trial {best_trial_id} with return {best_trial_return} and length {best_trial_length}.")
 
 
 if __name__ == "__main__":
