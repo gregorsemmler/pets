@@ -1,4 +1,5 @@
 import logging
+from timeit import default_timer as timer
 
 import gym
 import numpy as np
@@ -105,7 +106,7 @@ def train_on_replay_buffer(ensemble: PolicyEnsemble, train_buffer: ReplayBuffer,
     train_batch_losses, val_batch_losses = [], []
     train_epoch_losses, val_epoch_losses = [], []
 
-    logger.info(f"Training for {num_epochs} epochs.")
+    logger.info(f"Training for {num_epochs} epochs. (TrainSize / ValSize): ({len(train_buffer)}/{len(val_buffer)})")
     for epoch_idx in range(num_epochs):
 
         ensemble.train()
@@ -183,7 +184,7 @@ def run_pets():
     replay_buffer = ReplayBuffer(replay_buffer_size, state_shape,  action_shape)
 
     # Train parameters
-    train_batch_size = 128
+    train_batch_size = 32
     train_epochs = 50
     train_lr = 1e-3
     l2_regularization = 0
@@ -191,7 +192,7 @@ def run_pets():
     shuffle = True
     log_frequency = 1
 
-    num_random_steps = 200
+    num_random_steps = 1000
     # Fill replay buffer with initial data from random actions
     play_and_add_to_buffer(env, lambda x: env.action_space.sample(), replay_buffer, num_random_steps)
 
@@ -214,7 +215,14 @@ def run_pets():
     upper_bound = torch.tensor(np.tile(upper_bound_np, (horizon, 1)))
 
     solution = (lower_bound + upper_bound) / 2
+
+    trial_gamma = 1.0
+
+    trial_lengths = []
+    trial_returns = []
+
     for trial_idx in range(num_trials):
+        logger.info(f"Starting trial {trial_idx}.")
         ensemble.shuffle_ids(num_samples * num_particles)  # Once per Trial for TSInf
 
         train_buffer, val_buffer = replay_buffer.train_val_split(val_ratio=val_ratio, shuffle=shuffle)
@@ -230,17 +238,33 @@ def run_pets():
 
         train_on_replay_buffer(ensemble, train_buffer, val_buffer, optimizer, processor, train_batch_size, train_epochs,
                                log_frequency=log_frequency)
+        trial_length = 0
+        trial_return = 0.0
 
-        solution = cem_opt.optimize(solution)
-        print("")
-        action = solution.detach().cpu().numpy().squeeze()[0]
+        while True:
+            logger.info(f"Starting CEM Optimization for {num_iterations} iterations.")
+            start = timer()
+            solution = cem_opt.optimize(solution)
+            logger.info(f"Took {timer() - start:.3g} seconds.")
+            action = solution.detach().cpu().numpy().squeeze()[0]
 
-        action = np.clip(action, lower_bound_np, upper_bound_np)
-        state = env.step(action)
+            logger.info(f"Step {trial_length}# : Taking action {action}")
 
-        print("")
-        pass
-    pass
+            action = np.clip(action, lower_bound_np, upper_bound_np)
+            next_state, reward, done, info = env.step(action)
+            replay_buffer.add(state, action, next_state, reward, done)
+
+            trial_length += 1
+
+            if not done:
+                trial_return = reward + trial_gamma * trial_return
+            else:
+                trial_lengths.append(trial_length)
+                trial_returns.append(trial_return)
+                logger.info(f"Trial {trial_idx} over after {trial_length} steps with total return {trial_return}.")
+                break
+
+    print(f"{num_trials} trials done.")
 
 
 if __name__ == "__main__":

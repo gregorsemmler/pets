@@ -83,6 +83,9 @@ class ReplayBuffer(object):
         self.num_stored = 0
         self.batch_indices = None
 
+    def __len__(self):
+        return self.num_stored
+
     @classmethod
     def from_data(cls, states: np.ndarray, actions: np.ndarray, next_states: np.ndarray, rewards: np.ndarray,
                   dones: np.ndarray):

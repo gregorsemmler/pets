@@ -35,7 +35,7 @@ class CEMOptimizer(object):
 
         for _ in range(self.num_iterations):
             sampled = torch.zeros((self.num_samples,) + mean.shape)
-            sampled = torch.nn.init.trunc_normal_(sampled, mean[0]) * torch.sqrt(constrained_var) + mean
+            sampled = torch.nn.init.trunc_normal_(sampled, 0.0) * torch.sqrt(constrained_var) + mean
 
             costs = self.cost_function(sampled)
             best_values, best_indices = costs.topk(self.elite_size)
@@ -51,5 +51,6 @@ class CEMOptimizer(object):
             if best_iter_val > best_value:
                 best_value = best_iter_val
                 best_solution = sampled[best_indices[0]]
+                # TODO don't keep track of best solution?
 
-        return best_solution
+        return new_mean
