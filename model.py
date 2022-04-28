@@ -150,25 +150,32 @@ class MLPModel(TransitionModel):
 
 class MLPEnsemble(PolicyEnsemble):
 
-    def __init__(self, input_size, action_dimension, num_members, discrete=False, fully_params=None, activation=None,
-                 ensemble_mode=EnsembleMode.ALL_MEMBERS):
+    def __init__(self, state_dimension, action_dimension, num_members, discrete=False, fully_params=None,
+                 activation=None, ensemble_mode=EnsembleMode.ALL_MEMBERS, min_log_std=-5.0, max_log_std=0.25):
         self._num_members = num_members
         self.members = [
-            MLPModel(input_size, action_dimension, discrete=discrete, fully_params=fully_params, activation=activation)
+            MLPModel(state_dimension, action_dimension, discrete=discrete, fully_params=fully_params, activation=activation)
             for _ in range(num_members)]
         self.ensemble_mode = ensemble_mode
         self.permuted_ids = None
         self.reverse_permuted_ids = None
+        self.min_log_std = nn.Parameter(min_log_std * torch.ones(state_dimension))
+        self.max_log_std = nn.Parameter(max_log_std * torch.ones(state_dimension))
 
     def parameters(self):
         params = []
         for member in self.members:
             params += list(member.parameters())
+        params += [self.min_log_std, self.max_log_std]
         return params
 
     def to(self, device):
         for model in self.members:
             model.to(device)
+        self.min_log_std = nn.Parameter(
+            torch.tensor(self.min_log_std.detach().cpu().numpy(), device=device, requires_grad=True))
+        self.max_log_std = nn.Parameter(
+            torch.tensor(self.max_log_std.detach().cpu().numpy(), device=device, requires_grad=True))
         return self
 
     def train(self):
@@ -187,15 +194,26 @@ class MLPEnsemble(PolicyEnsemble):
         self.permuted_ids = np.random.permutation(batch_size)
         self.reverse_permuted_ids = np.argsort(self.permuted_ids)
 
+    def limit_log_std(self, log_std):
+        # https://github.com/kchua/handful-of-trials/blob/77fd8802cc30b7683f0227c90527b5414c0df34c/dmbrl/modeling/models/BNN.py#L414-L415
+        log_std = self.max_log_std - F.softplus(self.max_log_std - log_std)
+        log_std = self.min_log_std + F.softplus(log_std - self.min_log_std)
+        return log_std
+
     def forward(self, x):
         if self.ensemble_mode == EnsembleMode.ALL_MEMBERS:
             if (isinstance(x, list) or isinstance(x, tuple)) and len(x) == self.num_members:
-                return [model(m_in) for model, m_in in zip(self.members, x)]
+                result = [model(m_in) for model, m_in in zip(self.members, x)]
+                result = [(mean, self.limit_log_std(log_std)) for mean, log_std in result]
+                return result
             elif torch.is_tensor(x):
-                return [model(x) for model in self.members]
+                result = [model(x) for model in self.members]
+                result = [(mean, self.limit_log_std(log_std)) for mean, log_std in result]
+                return result
             else:
                 raise ValueError("Input needs to be tensor or list with length equal to number of members.")
-        elif self.ensemble_mode == EnsembleMode.FIXED_MEMBER or self.ensemble_mode == EnsembleMode.SHUFFLED_MEMBER or self.ensemble_mode == EnsembleMode.RANDOM_MEMBER:
+        elif self.ensemble_mode == EnsembleMode.FIXED_MEMBER or self.ensemble_mode == EnsembleMode.SHUFFLED_MEMBER \
+                or self.ensemble_mode == EnsembleMode.RANDOM_MEMBER:
 
             if self.ensemble_mode != EnsembleMode.FIXED_MEMBER:
                 batch_size = x.shape[0]
@@ -206,6 +224,7 @@ class MLPEnsemble(PolicyEnsemble):
             x_per_member = x.view(self.num_members, -1, *x.shape[1:])
             results = [model(el) for model, el in zip(self.members, x_per_member)]
             means, log_stds = list(zip(*results))
+            log_stds = [self.limit_log_std(el) for el in log_stds]
             mean_out = torch.cat(means)
             log_std_out = torch.cat(log_stds)
 

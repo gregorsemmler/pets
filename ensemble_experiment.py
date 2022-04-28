@@ -87,6 +87,8 @@ def train(config=None):
             model_out = ensemble(model_in)
 
             total_loss = gauss_nll_ensemble_loss(model_out, target_out)
+            # https://github.com/kchua/handful-of-trials/blob/77fd8802cc30b7683f0227c90527b5414c0df34c/dmbrl/modeling/models/BNN.py#L182
+            total_loss += 0.02 * (ensemble.max_log_std.sum() - ensemble.min_log_std.sum())
             optimizer.zero_grad()
             total_loss.backward()
             optimizer.step()
