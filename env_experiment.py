@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from gym import envs
 from torch.optim import Adam
 
+from common import shift_numpy_array
 from data import ReplayBuffer, BatchProcessor, gauss_nll_ensemble_loss, SimpleBatchProcessor, StandardNormalizer
 from envs.cartpole_continuous import ContinuousCartPoleEnv
 from model import DynamicsModel, EnsembleDynamicsModel, MLPEnsemble, EnsembleMode, PolicyEnsemble
@@ -186,34 +187,38 @@ def run_pets():
     train_batch_size = 32
     train_epochs = 50
     train_lr = 1e-3
-    l2_regularization = 0
-    val_ratio = 0.1
+    l2_regularization = 5e-5
+    val_ratio = 0.05
     shuffle = True
     train_log_frequency = 20
 
-    num_random_steps = 1000
+    num_random_steps = 200
     # Fill replay buffer with initial data from random actions
     play_and_add_to_buffer(env, lambda x: env.action_space.sample(), replay_buffer, num_random_steps)
 
     num_ensemble_members = 5
-    ensemble = MLPEnsemble(state_dim, action_dim, num_ensemble_members, ensemble_mode=EnsembleMode.SHUFFLED_MEMBER).to(
+    activation = "elu"
+    fully_params = [64, 64, 64]
+    ensemble = MLPEnsemble(state_dim, action_dim, num_ensemble_members, ensemble_mode=EnsembleMode.SHUFFLED_MEMBER,
+                           fully_params=fully_params, activation=activation).to(
         device)
     optimizer = Adam(ensemble.parameters(), lr=train_lr, weight_decay=l2_regularization)
     dynamics_model = EnsembleDynamicsModel(ensemble, env, device)
 
     # CEM Options
-    num_samples = 100
-    elite_size = 10
-    horizon = 10
-    num_iterations = 100
+    num_samples = 500
+    elite_size = 50
+    horizon = 15
+    num_iterations = 5
     lower_bound_np, upper_bound_np = env.action_space.low, env.action_space.high
     alpha = 0.1
-    num_particles = 15
+    num_particles = 20
 
     lower_bound = torch.tensor(np.tile(lower_bound_np, (horizon, 1)))
     upper_bound = torch.tensor(np.tile(upper_bound_np, (horizon, 1)))
 
-    solution = (lower_bound + upper_bound) / 2
+    initial_solution = (lower_bound + upper_bound) / 2
+    solution = initial_solution
 
     trial_gamma = 1.0
 
@@ -226,6 +231,7 @@ def run_pets():
     num_trials = 100
     for trial_idx in range(num_trials):
         logger.info(f"Starting trial {trial_idx}.")
+        state = env.reset()
         ensemble.shuffle_ids(num_samples * num_particles)  # Once per Trial for TSInf
 
         train_buffer, val_buffer = replay_buffer.train_val_split(val_ratio=val_ratio, shuffle=shuffle)
@@ -249,7 +255,12 @@ def run_pets():
             start = timer()
             solution = cem_opt.optimize(solution)
             logger.info(f"Took {timer() - start:.3g} seconds.")
-            action = solution.detach().cpu().numpy().squeeze()[0]
+            solution_np = solution.detach().cpu().numpy()
+            action = solution_np.squeeze()[0]
+
+            # Shift solution by one element for next round
+            solution_np = shift_numpy_array(solution_np, -1, fill_value=float(initial_solution[0]))
+            solution = torch.from_numpy(solution_np)
 
             logger.info(f"Step {trial_length}# : Taking action {action}")
 

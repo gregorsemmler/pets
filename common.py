@@ -3,6 +3,7 @@ import logging
 import math
 import signal
 
+import numpy as np
 import torch
 from gym.spaces import Discrete, Box
 
@@ -88,3 +89,17 @@ def parse_list(s):
 
 def parse_list_of_lists(s):
     return [[int(el) for el in lst.split(",")] for lst in s.split(";")]
+
+
+def shift_numpy_array(arr, num, fill_value=0.0):
+    # https://stackoverflow.com/a/42642326
+    result = np.empty_like(arr)
+    if num > 0:
+        result[:num] = fill_value
+        result[num:] = arr[:-num]
+    elif num < 0:
+        result[num:] = fill_value
+        result[:num] = arr[-num:]
+    else:
+        result[:] = arr
+    return result
