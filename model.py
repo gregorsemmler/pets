@@ -87,6 +87,14 @@ class PolicyEnsemble(object):
     def num_members(self) -> int:
         raise NotImplementedError()
 
+    @property
+    def min_log_std(self):
+        raise NotImplementedError()
+
+    @property
+    def max_log_std(self):
+        raise NotImplementedError()
+
     def train(self):
         raise NotImplementedError()
 
@@ -159,23 +167,23 @@ class MLPEnsemble(PolicyEnsemble):
         self.ensemble_mode = ensemble_mode
         self.permuted_ids = None
         self.reverse_permuted_ids = None
-        self.min_log_std = nn.Parameter(min_log_std * torch.ones(state_dimension))
-        self.max_log_std = nn.Parameter(max_log_std * torch.ones(state_dimension))
+        self._min_log_std = nn.Parameter(min_log_std * torch.ones(state_dimension))
+        self._max_log_std = nn.Parameter(max_log_std * torch.ones(state_dimension))
 
     def parameters(self):
         params = []
         for member in self.members:
             params += list(member.parameters())
-        params += [self.min_log_std, self.max_log_std]
+        params += [self._min_log_std, self._max_log_std]
         return params
 
     def to(self, device):
         for model in self.members:
             model.to(device)
-        self.min_log_std = nn.Parameter(
-            torch.tensor(self.min_log_std.detach().cpu().numpy(), device=device, requires_grad=True))
-        self.max_log_std = nn.Parameter(
-            torch.tensor(self.max_log_std.detach().cpu().numpy(), device=device, requires_grad=True))
+        self._min_log_std = nn.Parameter(
+            torch.tensor(self._min_log_std.detach().cpu().numpy(), device=device, requires_grad=True))
+        self._max_log_std = nn.Parameter(
+            torch.tensor(self._max_log_std.detach().cpu().numpy(), device=device, requires_grad=True))
         return self
 
     def train(self):
@@ -187,6 +195,15 @@ class MLPEnsemble(PolicyEnsemble):
             m.eval()
 
     @property
+    def min_log_std(self):
+        return self._min_log_std
+
+    @property
+    def max_log_std(self):
+        return self._max_log_std
+
+
+    @property
     def num_members(self) -> int:
         return self._num_members
 
@@ -196,8 +213,8 @@ class MLPEnsemble(PolicyEnsemble):
 
     def limit_log_std(self, log_std):
         # https://github.com/kchua/handful-of-trials/blob/77fd8802cc30b7683f0227c90527b5414c0df34c/dmbrl/modeling/models/BNN.py#L414-L415
-        log_std = self.max_log_std - F.softplus(self.max_log_std - log_std)
-        log_std = self.min_log_std + F.softplus(log_std - self.min_log_std)
+        log_std = self._max_log_std - F.softplus(self._max_log_std - log_std)
+        log_std = self._min_log_std + F.softplus(log_std - self._min_log_std)
         return log_std
 
     def forward(self, x):

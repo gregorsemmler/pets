@@ -79,7 +79,7 @@ def train(config=None):
     processor = SimpleBatchProcessor(device)
 
     batch_idx = 0
-    log_frequency = 100
+    log_frequency = 1
 
     for epoch_idx in range(num_epochs):
         for ensemble_batches in train_buffer.batches(batch_size, num_ensemble_members):

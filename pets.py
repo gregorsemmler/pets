@@ -137,12 +137,14 @@ class EnsembleTrainer(object):
             self.ensemble.train()
             train_epoch_loss = 0.0
             train_batch_count = 0
-            # logger.info(f"{trial_id}Training Epoch {epoch_idx}.")
+            logger.info(f"{trial_id}Training Epoch {self.epoch_idx}.")
             for ensemble_batches in train_buffer.batches(batch_size, self.ensemble.num_members):
                 model_in, target_out = list(zip(*[processor.process(b) for b in ensemble_batches]))
                 model_out = self.ensemble(model_in)
 
                 total_loss = gauss_nll_ensemble_loss(model_out, target_out)
+                # https://github.com/kchua/handful-of-trials/blob/77fd8802cc30b7683f0227c90527b5414c0df34c/dmbrl/modeling/models/BNN.py#L182
+                total_loss += 0.02 * (self.ensemble.max_log_std.sum() - self.ensemble.min_log_std.sum())
                 optimizer.zero_grad()
                 total_loss.backward()
                 optimizer.step()
@@ -150,7 +152,8 @@ class EnsembleTrainer(object):
                 self.writer.add_scalar("train_batch/loss", loss_value, self.train_batch_idx)
 
                 if self.train_batch_idx % log_frequency == 0:
-                    logger.info(f"{trial_id}Train Epoch #{self.epoch_idx} Batch #{self.train_batch_idx} Loss: {loss_value}")
+                    logger.info(
+                        f"{trial_id}Train Epoch #{self.epoch_idx} Batch #{self.train_batch_idx} Loss: {loss_value}")
 
                 train_epoch_loss += loss_value
                 train_batch_losses.append(loss_value)
@@ -161,7 +164,7 @@ class EnsembleTrainer(object):
             train_epoch_losses.append(train_epoch_loss)
             self.writer.add_scalar("train_epoch/loss", train_epoch_loss, self.epoch_idx)
 
-            # logger.info(f"{trial_id}Validation Epoch {epoch_idx}.")
+            logger.info(f"{trial_id}Validation Epoch {self.epoch_idx}.")
             self.ensemble.eval()
             val_epoch_loss = 0.0
             val_batch_count = 0
@@ -171,6 +174,8 @@ class EnsembleTrainer(object):
                     model_out = self.ensemble(model_in)
 
                 total_loss = gauss_nll_ensemble_loss(model_out, target_out)
+                # https://github.com/kchua/handful-of-trials/blob/77fd8802cc30b7683f0227c90527b5414c0df34c/dmbrl/modeling/models/BNN.py#L182
+                total_loss += 0.02 * (self.ensemble.max_log_std.sum() - self.ensemble.min_log_std.sum())
                 loss_value = total_loss.item()
                 self.writer.add_scalar("val_batch/loss", loss_value, self.val_batch_idx)
 
@@ -217,15 +222,14 @@ def run_pets(args):
     # Train parameters
     train_batch_size = 32
     # train_batch_size = 128
-    train_epochs = 50
-    # train_epochs = 200
-    # train_lr = 1e-3
-    train_lr = 1e-2
+    # train_epochs = 50
+    train_epochs = 1000
+    train_lr = 1e-3
     # l2_regularization = 5e-5
     l2_regularization = 0
     val_ratio = 0.05
     shuffle = True
-    train_log_frequency = 100
+    train_log_frequency = 1
 
     num_random_steps = 200
     # Fill replay buffer with initial data from random actions
@@ -270,7 +274,7 @@ def run_pets(args):
 
     trainer = EnsembleTrainer(ensemble, optimizer, writer)
 
-    num_trials = 3
+    num_trials = 1
     for trial_idx in range(num_trials):
         logger.info(f"Starting trial {trial_idx}.")
         state = env.reset()
