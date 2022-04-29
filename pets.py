@@ -215,11 +215,12 @@ def run_pets(args):
     replay_buffer = ReplayBuffer(replay_buffer_size, state_shape,  action_shape)
 
     # Train parameters
-    # train_batch_size = 32
-    train_batch_size = 128
+    train_batch_size = 32
+    # train_batch_size = 128
     train_epochs = 50
     # train_epochs = 200
-    train_lr = 1e-3
+    # train_lr = 1e-3
+    train_lr = 1e-2
     # l2_regularization = 5e-5
     l2_regularization = 0
     val_ratio = 0.05
@@ -267,19 +268,19 @@ def run_pets(args):
     best_trial_length = 0
     best_trial_id = None
 
-    num_trials = 10
+    trainer = EnsembleTrainer(ensemble, optimizer, writer)
+
+    num_trials = 3
     for trial_idx in range(num_trials):
         logger.info(f"Starting trial {trial_idx}.")
         state = env.reset()
         solution = initial_solution.clone()
-        ensemble.shuffle_ids(num_samples * num_particles)  # Once per Trial for TSInf
+        # ensemble.shuffle_ids(num_samples * num_particles)  # Once per Trial for TSInf
 
         train_buffer, val_buffer = replay_buffer.train_val_split(val_ratio=val_ratio, shuffle=shuffle)
         normalizer = get_normalizer_for_replay_buffer(train_buffer, device)
         processor = SimpleBatchProcessor(device, normalizer=normalizer)
         dynamics_model.normalizer = normalizer
-
-        trainer = EnsembleTrainer(ensemble, optimizer, writer)
 
         def eval_func(actions):
             return torch.tensor(dynamics_model_evaluation(state, dynamics_model, actions, num_particles))
@@ -321,8 +322,8 @@ def run_pets(args):
                 trial_returns.append(trial_return)
                 logger.info(f"Trial {trial_idx} over after {trial_length} steps with total return {trial_return}.")
 
-                writer.add_scalar("trial_return", trial_return)
-                writer.add_scalar("trial_length", trial_length)
+                writer.add_scalar("trial_return", trial_return, trial_idx)
+                writer.add_scalar("trial_length", trial_length,  trial_idx)
 
                 if trial_return > best_trial_return:
                     logger.info("New best trial.")
