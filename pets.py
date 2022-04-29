@@ -17,10 +17,10 @@ from optimizer import CEMOptimizer
 logger = logging.getLogger(__name__)
 
 
-def main():
-    env_names = sorted(envs.registry.env_specs.keys())
-    xx = gym.make("CartPole-v1")
-    print("")
+class DummySummaryWriter(object):
+
+    def add_scalar(self, tag, scalar_value, global_step=None, walltime=None):
+        pass
 
 
 def random_agent_evaluation():
@@ -108,13 +108,14 @@ def train_on_replay_buffer(ensemble: PolicyEnsemble, train_buffer: ReplayBuffer,
     train_epoch_losses, val_epoch_losses = [], []
 
     trial_id = "" if trial_id is None else f"Trial {trial_id}: "
-    logger.info(f"{trial_id}Training for {num_epochs} epochs. (TrainSize / ValSize): ({len(train_buffer)}/{len(val_buffer)})")
+    # logger.info(
+    #     f"{trial_id}Training for {num_epochs} epochs. (TrainSize / ValSize): ({len(train_buffer)}/{len(val_buffer)})")
     for epoch_idx in range(num_epochs):
 
         ensemble.train()
         train_epoch_loss = 0.0
         train_batch_count = 0
-        logger.info(f"{trial_id}Training Epoch {epoch_idx}.")
+        # logger.info(f"{trial_id}Training Epoch {epoch_idx}.")
         for ensemble_batches in train_buffer.batches(batch_size, ensemble.num_members):
             model_in, target_out = list(zip(*[processor.process(b) for b in ensemble_batches]))
             model_out = ensemble(model_in)
@@ -136,7 +137,7 @@ def train_on_replay_buffer(ensemble: PolicyEnsemble, train_buffer: ReplayBuffer,
         train_epoch_loss = 0.0 if train_batch_count == 0 else train_epoch_loss / train_batch_count
         train_epoch_losses.append(train_epoch_loss)
 
-        logger.info(f"{trial_id}Validation Epoch {epoch_idx}.")
+        # logger.info(f"{trial_id}Validation Epoch {epoch_idx}.")
         ensemble.eval()
         val_epoch_loss = 0.0
         val_batch_count = 0
@@ -184,13 +185,16 @@ def run_pets():
     replay_buffer = ReplayBuffer(replay_buffer_size, state_shape,  action_shape)
 
     # Train parameters
-    train_batch_size = 32
+    # train_batch_size = 32
+    train_batch_size = 128
     train_epochs = 50
+    # train_epochs = 200
     train_lr = 1e-3
-    l2_regularization = 5e-5
+    # l2_regularization = 5e-5
+    l2_regularization = 0
     val_ratio = 0.05
     shuffle = True
-    train_log_frequency = 20
+    train_log_frequency = 100
 
     num_random_steps = 200
     # Fill replay buffer with initial data from random actions
@@ -198,7 +202,7 @@ def run_pets():
 
     num_ensemble_members = 5
     activation = "elu"
-    fully_params = [64, 64, 64]
+    fully_params = [200, 200, 200]
     ensemble = MLPEnsemble(state_dim, action_dim, num_ensemble_members, ensemble_mode=EnsembleMode.SHUFFLED_MEMBER,
                            fully_params=fully_params, activation=activation).to(
         device)
@@ -218,7 +222,6 @@ def run_pets():
     upper_bound = torch.tensor(np.tile(upper_bound_np, (horizon, 1)))
 
     initial_solution = (lower_bound + upper_bound) / 2
-    solution = initial_solution
 
     trial_gamma = 1.0
 
@@ -228,10 +231,11 @@ def run_pets():
     best_trial_length = 0
     best_trial_id = None
 
-    num_trials = 100
+    num_trials = 10
     for trial_idx in range(num_trials):
         logger.info(f"Starting trial {trial_idx}.")
         state = env.reset()
+        solution = initial_solution.clone()
         ensemble.shuffle_ids(num_samples * num_particles)  # Once per Trial for TSInf
 
         train_buffer, val_buffer = replay_buffer.train_val_split(val_ratio=val_ratio, shuffle=shuffle)
@@ -251,10 +255,10 @@ def run_pets():
         trial_return = 0.0
 
         while True:
-            logger.info(f"Starting CEM Optimization for {num_iterations} iterations.")
+            # logger.info(f"Starting CEM Optimization for {num_iterations} iterations.")
             start = timer()
             solution = cem_opt.optimize(solution)
-            logger.info(f"Took {timer() - start:.3g} seconds.")
+            # logger.info(f"Took {timer() - start:.3g} seconds.")
             solution_np = solution.detach().cpu().numpy()
             action = solution_np.squeeze()[0]
 
@@ -262,7 +266,7 @@ def run_pets():
             solution_np = shift_numpy_array(solution_np, -1, fill_value=float(initial_solution[0]))
             solution = torch.from_numpy(solution_np)
 
-            logger.info(f"Step {trial_length}# : Taking action {action}")
+            # logger.info(f"Trial {trial_idx}: Step {trial_length}# : Taking action {action}")
 
             action = np.clip(action, lower_bound_np, upper_bound_np)
             next_state, reward, done, info = env.step(action)
@@ -286,6 +290,7 @@ def run_pets():
 
     logger.info(f"{num_trials} trials done.")
     logger.info(f"Best trial {best_trial_id} with return {best_trial_return} and length {best_trial_length}.")
+    print(trial_returns) # TODO
 
 
 if __name__ == "__main__":
