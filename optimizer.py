@@ -33,6 +33,7 @@ class CEMOptimizer(object):
         lb_dist, ub_dist = mean - self.lower_bound, self.upper_bound - mean
         constrained_var = torch.min(torch.min(torch.square(lb_dist / 2), torch.square(ub_dist / 2)), var)
 
+        new_mean = None
         for _ in range(self.num_iterations):
             sampled = torch.zeros((self.num_samples,) + mean.shape)
             sampled = torch.nn.init.trunc_normal_(sampled, 0.0) * torch.sqrt(constrained_var) + mean
