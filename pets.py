@@ -209,7 +209,6 @@ def run_pets(args):
     state_shape = state.shape
     action_shape = env.action_space.sample().shape
 
-
     if len(state_shape) != 1 or len(action_shape) != 1:
         raise ValueError("State and action shape need to have dimension 1")
 
@@ -222,8 +221,8 @@ def run_pets(args):
     # Train parameters
     train_batch_size = 32
     # train_batch_size = 128
-    # train_epochs = 50
-    train_epochs = 1000
+    train_epochs = 50
+    # train_epochs = 1000
     train_lr = 1e-3
     # l2_regularization = 5e-5
     l2_regularization = 0
@@ -238,6 +237,8 @@ def run_pets(args):
     num_ensemble_members = 5
     activation = "elu"
     fully_params = [200, 200, 200]
+    # ensemble_mode = EnsembleMode.SHUFFLED_MEMBER
+    ensemble_mode = EnsembleMode.FIXED_MEMBER
 
     if args.device_token is None:
         device_token = "cuda" if torch.cuda.is_available() else "cpu"
@@ -245,7 +246,7 @@ def run_pets(args):
         device_token = args.device_token
 
     device = torch.device(device_token)
-    ensemble = MLPEnsemble(state_dim, action_dim, num_ensemble_members, ensemble_mode=EnsembleMode.SHUFFLED_MEMBER,
+    ensemble = MLPEnsemble(state_dim, action_dim, num_ensemble_members, ensemble_mode=ensemble_mode,
                            fully_params=fully_params, activation=activation).to(device)
     optimizer = Adam(ensemble.parameters(), lr=train_lr, weight_decay=l2_regularization)
     dynamics_model = EnsembleDynamicsModel(ensemble, env, device)
@@ -274,7 +275,7 @@ def run_pets(args):
 
     trainer = EnsembleTrainer(ensemble, optimizer, writer)
 
-    num_trials = 1
+    num_trials = 2
     for trial_idx in range(num_trials):
         logger.info(f"Starting trial {trial_idx}.")
         state = env.reset()
@@ -311,7 +312,7 @@ def run_pets(args):
             solution_np = shift_numpy_array(solution_np, -1, fill_value=float(initial_solution[0]))
             solution = torch.from_numpy(solution_np)
 
-            # logger.info(f"Trial {trial_idx}: Step {trial_length}# : Taking action {action}")
+            logger.info(f"Trial {trial_idx}: Step {trial_length}# : Taking action {action}")
 
             action = np.clip(action, lower_bound_np, upper_bound_np)
             next_state, reward, done, info = env.step(action)

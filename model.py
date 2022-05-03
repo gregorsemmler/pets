@@ -202,7 +202,6 @@ class MLPEnsemble(PolicyEnsemble):
     def max_log_std(self):
         return self._max_log_std
 
-
     @property
     def num_members(self) -> int:
         return self._num_members
@@ -302,3 +301,167 @@ class EnsembleDynamicsModel(DynamicsModel):
         dones = np.array([self.env.is_done(s, n_s) for s, n_s in zip(states, next_states)])
         rewards = np.array([self.env.reward(s, n_s, d) for s, n_s, d in zip(states, next_states, dones)])
         return states, rewards, dones, {}
+
+
+class EnsembleLinear(nn.Module):
+    """
+    A Linear Layer for an Ensemble
+    """
+
+    def __init__(self, in_features, out_features, num_members=1, bias=True, device=None, dtype=None):
+        super().__init__()
+        kwargs = {"device": device, "dtype": dtype}
+        self.in_features = in_features
+        self.out_features = out_features
+        self.num_members = num_members
+        self.weight = nn.Parameter(torch.empty((num_members, in_features, out_features), **kwargs))
+        if bias:
+            self.bias = nn.Parameter(torch.empty((num_members, 1, out_features), **kwargs))
+        else:
+            self.register_parameter("bias", None)
+            self.bias = None
+        self.init_parameters()
+
+    def init_parameters(self):
+        # Use default initialization from nn.Linear
+        # https://github.com/pytorch/pytorch/blob/master/torch/nn/modules/linear.py#L92
+        for i in range(self.num_members):
+            torch.nn.init.kaiming_uniform_(self.weight[i], a=math.sqrt(5))
+            if self.bias is not None:
+                fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(self.weight[i])
+                bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+                torch.nn.init.uniform_(self.bias[i], -bound, bound)
+
+    def forward(self, x):
+        result = x.matmul(self.weight)
+        if self.bias is not None:
+            result += self.bias
+        return result
+
+
+class MLPEnsemble2(nn.Module, PolicyEnsemble):
+    """
+    More efficient implementation of Ensemble
+    """
+
+    def __init__(self, state_dimension, action_dimension, num_members, discrete=False, fully_params=None,
+                 activation=None, ensemble_mode=EnsembleMode.ALL_MEMBERS, min_log_std=-5.0, max_log_std=0.25):
+        super().__init__()
+
+        if fully_params is None:
+            fully_params = [64, 64]
+        if activation is None:
+            activation = "relu"
+
+        self.action_dim = action_dimension
+        self.state_dimension = state_dimension
+        self.activation = activation
+        self.discrete = discrete
+
+        layers = []
+        prev_full_n = self.state_dimension + self.action_dim
+
+        for full_n in fully_params:
+            layers.append(EnsembleLinear(prev_full_n, full_n, self.num_members))
+            layers.append(get_activation(self.activation))
+            prev_full_n = full_n
+
+        self.shared_layers = nn.Sequential(*layers)
+        self.mean = nn.Linear(prev_full_n, self.state_dimension)
+        if not self.discrete:
+            self.log_std = nn.Linear(prev_full_n, self.state_dimension)
+        else:
+            self.log_std = None
+
+        self._num_members = num_members
+        self.ensemble_mode = ensemble_mode
+        self.permuted_ids = None
+        self.reverse_permuted_ids = None
+        self._min_log_std = nn.Parameter(min_log_std * torch.ones(state_dimension))
+        self._max_log_std = nn.Parameter(max_log_std * torch.ones(state_dimension))
+
+    @property
+    def min_log_std(self):
+        return self._min_log_std
+
+    @property
+    def max_log_std(self):
+        return self._max_log_std
+
+    @property
+    def num_members(self) -> int:
+        return self._num_members
+
+    def shuffle_ids(self, batch_size):
+        self.permuted_ids = np.random.permutation(batch_size)
+        self.reverse_permuted_ids = np.argsort(self.permuted_ids)
+
+    def limit_log_std(self, log_std):
+        # https://github.com/kchua/handful-of-trials/blob/77fd8802cc30b7683f0227c90527b5414c0df34c/dmbrl/modeling/models/BNN.py#L414-L415
+        log_std = self._max_log_std - F.softplus(self._max_log_std - log_std)
+        log_std = self._min_log_std + F.softplus(log_std - self._min_log_std)
+        return log_std
+
+    def forward(self, x):
+        # TODO
+        if self.ensemble_mode == EnsembleMode.ALL_MEMBERS:
+            if (isinstance(x, list) or isinstance(x, tuple)) and len(x) == self.num_members:
+                result = [model(m_in) for model, m_in in zip(self.members, x)]
+                result = [(mean, self.limit_log_std(log_std)) for mean, log_std in result]
+                return result
+            elif torch.is_tensor(x):
+                result = [model(x) for model in self.members]
+                result = [(mean, self.limit_log_std(log_std)) for mean, log_std in result]
+                return result
+            else:
+                raise ValueError("Input needs to be tensor or list with length equal to number of members.")
+        elif self.ensemble_mode == EnsembleMode.FIXED_MEMBER or self.ensemble_mode == EnsembleMode.SHUFFLED_MEMBER \
+                or self.ensemble_mode == EnsembleMode.RANDOM_MEMBER:
+
+            if self.ensemble_mode != EnsembleMode.FIXED_MEMBER:
+                batch_size = x.shape[0]
+                if (self.permuted_ids is None) or self.ensemble_mode == EnsembleMode.RANDOM_MEMBER:
+                    self.shuffle_ids(batch_size)
+                x = x[self.permuted_ids]
+
+            x_per_member = x.view(self.num_members, -1, *x.shape[1:])
+            results = [model(el) for model, el in zip(self.members, x_per_member)]
+            means, log_stds = list(zip(*results))
+            log_stds = [self.limit_log_std(el) for el in log_stds]
+            mean_out = torch.cat(means)
+            log_std_out = torch.cat(log_stds)
+
+            if self.ensemble_mode != EnsembleMode.FIXED_MEMBER:
+                # shuffle back
+                mean_out = mean_out[self.reverse_permuted_ids]
+                log_std_out = log_std_out[self.reverse_permuted_ids]
+                x = x[self.reverse_permuted_ids]  # TODO remove?
+
+            return mean_out, log_std_out
+
+        raise NotImplementedError()
+
+
+if __name__ == "__main__":
+    fully_params = [200, 200, 200]
+    layers = []
+    state_dimension = 4
+    action_dim = 1
+    batch_size = 128
+    activation = "relu"
+    num_members = 5
+    prev_full_n = state_dimension + action_dim
+    in_size = state_dimension + action_dim
+
+    for full_n in fully_params:
+        layers.append(EnsembleLinear(prev_full_n, full_n, num_members))
+        layers.append(get_activation(activation))
+        prev_full_n = full_n
+
+    shared_layers = nn.Sequential(*layers)
+
+    print("")
+    model_in = torch.randn(num_members, batch_size, in_size)
+    model_out = shared_layers(model_in)
+    print("")
+    pass
