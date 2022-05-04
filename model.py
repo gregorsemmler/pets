@@ -357,12 +357,13 @@ class MLPEnsemble2(nn.Module, PolicyEnsemble):
         self.state_dimension = state_dimension
         self.activation = activation
         self.discrete = discrete
+        self._num_members = num_members
 
         layers = []
         prev_full_n = self.state_dimension + self.action_dim
 
         for full_n in fully_params:
-            layers.append(EnsembleLinear(prev_full_n, full_n, self.num_members))
+            layers.append(EnsembleLinear(prev_full_n, full_n, self._num_members))
             layers.append(get_activation(self.activation))
             prev_full_n = full_n
 
@@ -372,7 +373,6 @@ class MLPEnsemble2(nn.Module, PolicyEnsemble):
         else:
             self.mean_and_log_std = nn.Linear(prev_full_n,  self.state_dimension)
 
-        self._num_members = num_members
         self.ensemble_mode = ensemble_mode
         self.permuted_ids = None
         self.reverse_permuted_ids = None
@@ -411,7 +411,7 @@ class MLPEnsemble2(nn.Module, PolicyEnsemble):
 
         if self.ensemble_mode == EnsembleMode.ALL_MEMBERS:
             if (isinstance(x, list) or isinstance(x, tuple)) and len(x) == self.num_members:
-                x = torch.cat(x)
+                x = torch.stack(x)
             if torch.is_tensor(x):
                 return self.ensemble_forward(x)
             else:
@@ -427,6 +427,8 @@ class MLPEnsemble2(nn.Module, PolicyEnsemble):
 
             x_per_member = x.view(self.num_members, -1, *x.shape[1:])
             mean_out, log_std_out = self.ensemble_forward(x_per_member)
+            mean_out = mean_out.view(-1, mean_out.shape[-1])
+            log_std_out = log_std_out.view(-1, mean_out.shape[-1])
 
             if self.ensemble_mode != EnsembleMode.FIXED_MEMBER:
                 # shuffle back

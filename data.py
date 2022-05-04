@@ -179,10 +179,14 @@ class ReplayBuffer(object):
 
 def gauss_nll_ensemble_loss(ensemble_out, targets):
     losses = []
-    if len(targets) != len(ensemble_out):
-        raise ValueError("Model output is not same length as target")
+    if isinstance(ensemble_out, tuple) and len(ensemble_out) == 2:
+        ensemble_means, ensemble_log_stds = ensemble_out
+    elif len(targets) == len(ensemble_out):
+        ensemble_means, ensemble_log_stds = tuple(zip(*ensemble_out))
+    else:
+        raise ValueError("Wrong Model output format")
 
-    for (mean_model, log_std_model), target in zip(ensemble_out, targets):
+    for mean_model, log_std_model, target in zip(ensemble_means, ensemble_log_stds, targets):
         var = torch.exp(2 * log_std_model)
         model_loss = F.gaussian_nll_loss(mean_model, target, var)
         losses.append(model_loss)

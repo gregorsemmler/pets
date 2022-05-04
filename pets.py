@@ -14,7 +14,7 @@ from torch.utils.tensorboard import SummaryWriter
 from common import shift_numpy_array
 from data import ReplayBuffer, BatchProcessor, gauss_nll_ensemble_loss, SimpleBatchProcessor, StandardNormalizer
 from envs.cartpole_continuous import ContinuousCartPoleEnv
-from model import DynamicsModel, EnsembleDynamicsModel, MLPEnsemble, EnsembleMode, PolicyEnsemble
+from model import DynamicsModel, EnsembleDynamicsModel, MLPEnsemble, EnsembleMode, PolicyEnsemble, MLPEnsemble2
 from optimizer import CEMOptimizer
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,8 @@ def dynamics_model_evaluation(initial_state, dynamics_model: DynamicsModel, hori
     for time_step in range(horizon):
         action = horizon_actions[:, time_step, :]
         actions = np.tile(action, (num_particles, 1))
-        states, rewards, dones, _ = dynamics_model.step(states, actions)
+        with torch.no_grad():
+            states, rewards, dones, _ = dynamics_model.step(states, actions)
         rewards[done_envs] = 0.0
         done_envs |= dones
         average_rewards += rewards
@@ -142,13 +143,16 @@ class EnsembleTrainer(object):
                 model_in, target_out = list(zip(*[processor.process(b) for b in ensemble_batches]))
                 model_out = self.ensemble(model_in)
 
-                total_loss = gauss_nll_ensemble_loss(model_out, target_out)
+                nll_loss = gauss_nll_ensemble_loss(model_out, target_out)
                 # https://github.com/kchua/handful-of-trials/blob/77fd8802cc30b7683f0227c90527b5414c0df34c/dmbrl/modeling/models/BNN.py#L182
-                total_loss += 0.02 * (self.ensemble.max_log_std.sum() - self.ensemble.min_log_std.sum())
+                log_std_limit_loss = 0.02 * (self.ensemble.max_log_std.sum() - self.ensemble.min_log_std.sum())
+                total_loss = nll_loss + log_std_limit_loss
                 optimizer.zero_grad()
                 total_loss.backward()
                 optimizer.step()
                 loss_value = total_loss.item()
+                self.writer.add_scalar("train_batch/nll_loss", nll_loss.item(), self.train_batch_idx)
+                self.writer.add_scalar("train_batch/log_std_limit_loss", log_std_limit_loss.item(), self.train_batch_idx)
                 self.writer.add_scalar("train_batch/loss", loss_value, self.train_batch_idx)
 
                 if self.train_batch_idx % log_frequency == 0:
@@ -173,10 +177,12 @@ class EnsembleTrainer(object):
                 with torch.no_grad():
                     model_out = self.ensemble(model_in)
 
-                total_loss = gauss_nll_ensemble_loss(model_out, target_out)
+                nll_loss = gauss_nll_ensemble_loss(model_out, target_out)
                 # https://github.com/kchua/handful-of-trials/blob/77fd8802cc30b7683f0227c90527b5414c0df34c/dmbrl/modeling/models/BNN.py#L182
-                total_loss += 0.02 * (self.ensemble.max_log_std.sum() - self.ensemble.min_log_std.sum())
-                loss_value = total_loss.item()
+                log_std_limit_loss = 0.02 * (self.ensemble.max_log_std.sum() - self.ensemble.min_log_std.sum())
+                loss_value = nll_loss + log_std_limit_loss
+                self.writer.add_scalar("val_batch/nll_loss", nll_loss.item(), self.train_batch_idx)
+                self.writer.add_scalar("val_batch/log_std_limit_loss", log_std_limit_loss.item(), self.train_batch_idx)
                 self.writer.add_scalar("val_batch/loss", loss_value, self.val_batch_idx)
 
                 if self.val_batch_idx % log_frequency == 0:
@@ -246,8 +252,8 @@ def run_pets(args):
         device_token = args.device_token
 
     device = torch.device(device_token)
-    ensemble = MLPEnsemble(state_dim, action_dim, num_ensemble_members, ensemble_mode=ensemble_mode,
-                           fully_params=fully_params, activation=activation).to(device)
+    ensemble = MLPEnsemble2(state_dim, action_dim, num_ensemble_members, ensemble_mode=ensemble_mode,
+                            fully_params=fully_params, activation=activation).to(device)
     optimizer = Adam(ensemble.parameters(), lr=train_lr, weight_decay=l2_regularization)
     dynamics_model = EnsembleDynamicsModel(ensemble, env, device)
 
