@@ -367,11 +367,10 @@ class MLPEnsemble2(nn.Module, PolicyEnsemble):
             prev_full_n = full_n
 
         self.shared_layers = nn.Sequential(*layers)
-        self.mean = nn.Linear(prev_full_n, self.state_dimension)
         if not self.discrete:
-            self.log_std = nn.Linear(prev_full_n, self.state_dimension)
+            self.mean_and_log_std = nn.Linear(prev_full_n,  2*self.state_dimension)
         else:
-            self.log_std = None
+            self.mean_and_log_std = nn.Linear(prev_full_n,  self.state_dimension)
 
         self._num_members = num_members
         self.ensemble_mode = ensemble_mode
@@ -402,17 +401,19 @@ class MLPEnsemble2(nn.Module, PolicyEnsemble):
         log_std = self._min_log_std + F.softplus(log_std - self._min_log_std)
         return log_std
 
+    def ensemble_forward(self, x):
+        shared_out = self.shared_layers(x)
+        m_and_log_s = self.mean_and_log_std(shared_out)
+        mean, log_std = m_and_log_s[..., :self.state_dimension], m_and_log_s[..., self.state_dimension:]
+        return mean, self.limit_log_std(log_std)
+
     def forward(self, x):
-        # TODO
+
         if self.ensemble_mode == EnsembleMode.ALL_MEMBERS:
             if (isinstance(x, list) or isinstance(x, tuple)) and len(x) == self.num_members:
-                result = [model(m_in) for model, m_in in zip(self.members, x)]
-                result = [(mean, self.limit_log_std(log_std)) for mean, log_std in result]
-                return result
-            elif torch.is_tensor(x):
-                result = [model(x) for model in self.members]
-                result = [(mean, self.limit_log_std(log_std)) for mean, log_std in result]
-                return result
+                x = torch.cat(x)
+            if torch.is_tensor(x):
+                return self.ensemble_forward(x)
             else:
                 raise ValueError("Input needs to be tensor or list with length equal to number of members.")
         elif self.ensemble_mode == EnsembleMode.FIXED_MEMBER or self.ensemble_mode == EnsembleMode.SHUFFLED_MEMBER \
@@ -425,17 +426,12 @@ class MLPEnsemble2(nn.Module, PolicyEnsemble):
                 x = x[self.permuted_ids]
 
             x_per_member = x.view(self.num_members, -1, *x.shape[1:])
-            results = [model(el) for model, el in zip(self.members, x_per_member)]
-            means, log_stds = list(zip(*results))
-            log_stds = [self.limit_log_std(el) for el in log_stds]
-            mean_out = torch.cat(means)
-            log_std_out = torch.cat(log_stds)
+            mean_out, log_std_out = self.ensemble_forward(x_per_member)
 
             if self.ensemble_mode != EnsembleMode.FIXED_MEMBER:
                 # shuffle back
                 mean_out = mean_out[self.reverse_permuted_ids]
                 log_std_out = log_std_out[self.reverse_permuted_ids]
-                x = x[self.reverse_permuted_ids]  # TODO remove?
 
             return mean_out, log_std_out
 
