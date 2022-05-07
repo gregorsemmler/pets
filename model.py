@@ -35,12 +35,14 @@ def get_output_shape(layer, shape):
     return before_flattening, after_flattening
 
 
-def get_activation(activation):
-    if activation == "relu":
+def get_activation(act):
+    if act == "relu":
         return nn.ReLU(inplace=True)
-    elif activation == "elu":
+    elif act == "elu":
         return nn.ELU(inplace=True)
-    raise ValueError(f"Unknown Activation {activation}")
+    elif act == "leaky_relu":
+        return nn.LeakyReLU(inplace=True)
+    raise ValueError(f"Unknown Activation {act}")
 
 
 class TransitionModel(nn.Module):
@@ -438,28 +440,3 @@ class MLPEnsemble2(nn.Module, PolicyEnsemble):
             return mean_out, log_std_out
 
         raise NotImplementedError()
-
-
-if __name__ == "__main__":
-    fully_params = [200, 200, 200]
-    layers = []
-    state_dimension = 4
-    action_dim = 1
-    batch_size = 128
-    activation = "relu"
-    num_members = 5
-    prev_full_n = state_dimension + action_dim
-    in_size = state_dimension + action_dim
-
-    for full_n in fully_params:
-        layers.append(EnsembleLinear(prev_full_n, full_n, num_members))
-        layers.append(get_activation(activation))
-        prev_full_n = full_n
-
-    shared_layers = nn.Sequential(*layers)
-
-    print("")
-    model_in = torch.randn(num_members, batch_size, in_size)
-    model_out = shared_layers(model_in)
-    print("")
-    pass
