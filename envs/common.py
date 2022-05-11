@@ -1,4 +1,5 @@
 import gym
+import numpy as np
 
 
 class RewardFuncEnv(gym.Env):
@@ -12,7 +13,7 @@ class RewardFuncEnv(gym.Env):
     def render(self, mode="human"):
         raise NotImplementedError()
 
-    def reward(self, state, new_state, done):
+    def reward(self, state, new_state, done) -> np.ndarray:
         """
         Returns the reward obtained when transitioning from a state into a new state, depending on whether the
         environment is done or not.
@@ -23,7 +24,7 @@ class RewardFuncEnv(gym.Env):
         """
         raise NotImplementedError()
 
-    def is_done(self, state, new_state) -> bool:
+    def is_done(self, state, new_state) -> np.ndarray:
         """
         Returns whether the environment is done when transitioning from one state to the next.
         :param state: the current state.

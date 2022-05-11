@@ -55,15 +55,11 @@ class ContinuousCartPoleEnv(RewardFuncEnv):
         195.0 over 100 consecutive trials.
     """
 
-    def is_done(self, state, new_state) -> bool:
-        (x, x_dot, theta, theta_dot) = new_state
+    def is_done(self, state: np.ndarray, new_state: np.ndarray) -> bool:
+        x, theta = new_state[:, 0], new_state[:, 2]
 
-        done = bool(
-            x < -self.x_threshold
-            or x > self.x_threshold
-            or theta < -self.theta_threshold_radians
-            or theta > self.theta_threshold_radians
-        )
+        done = (x < - self.x_threshold) | (x > self.x_threshold) | (theta < -self.theta_threshold_radians) | (
+                theta > self.theta_threshold_radians)
         return done
 
     metadata = {"render.modes": ["human", "rgb_array"], "video.frames_per_second": 50}
@@ -109,21 +105,13 @@ class ContinuousCartPoleEnv(RewardFuncEnv):
         self.np_random, seed = seeding.np_random(seed)
         return [seed]
 
-    def reward(self, state, new_state, done):
-        if not done:
-            reward = 1.0
-        elif self.steps_beyond_done is None:
-            # Pole just fell!
-            self.steps_beyond_done = 0
-            reward = 1.0
-        else:
-            self.steps_beyond_done += 1
-            reward = 0.0
-        return reward
+    def reward(self, state: np.ndarray, new_state: np.ndarray, done: np.ndarray):
+        return (~done).astype(np.float32)
 
     def step(self, action):
         err_msg = "%r (%s) invalid" % (action, type(action))
         assert self.action_space.contains(action), err_msg
+        action = float(action)
 
         x, x_dot, theta, theta_dot = self.state
         force = action * self.force_mag
@@ -154,8 +142,17 @@ class ContinuousCartPoleEnv(RewardFuncEnv):
         old_state = self.state
         self.state = (x, x_dot, theta, theta_dot)
 
-        done = self.is_done(old_state, self.state)
-        reward = self.reward(old_state, self.state, done)
+        new_state_np = np.array(self.state)[np.newaxis, :]
+        done = bool(self.is_done(old_state, new_state_np))
+        if not done:
+            reward = 1.0
+        elif self.steps_beyond_done is None:
+            # Pole just fell!
+            self.steps_beyond_done = 0
+            reward = 1.0
+        else:
+            self.steps_beyond_done += 1
+            reward = 0.0
 
         return np.array(self.state, dtype=np.float32).squeeze(), reward, done, {}
 

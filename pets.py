@@ -65,7 +65,7 @@ def dynamics_model_evaluation(initial_state, dynamics_model: DynamicsModel, hori
     done_envs = np.zeros((batch_size * num_particles, ), dtype=bool)
     for time_step in range(horizon):
         action = horizon_actions[:, time_step, :]
-        actions = np.tile(action, (num_particles, 1))
+        actions = np.repeat(action, num_particles)[:, np.newaxis]
         with torch.no_grad():
             states, rewards, dones, _ = dynamics_model.step(states, actions)
         rewards[done_envs] = 0.0
@@ -121,7 +121,7 @@ class EnsembleTrainer(object):
         self.epoch_idx = 0
 
     def fit(self, train_buffer: ReplayBuffer, val_buffer: ReplayBuffer, optimizer, processor: BatchProcessor,
-            batch_size, num_epochs, log_frequency=100, trial_id=None):
+            batch_size, num_epochs, log_frequency=100, trial_id=None, silent=False):
 
         prev_ensemble_mode = self.ensemble.ensemble_mode
         self.ensemble.ensemble_mode = EnsembleMode.ALL_MEMBERS
@@ -138,7 +138,8 @@ class EnsembleTrainer(object):
             self.ensemble.train()
             train_epoch_loss = 0.0
             train_batch_count = 0
-            logger.info(f"{trial_id}Training Epoch {self.epoch_idx}.")
+            if not silent:
+                logger.info(f"{trial_id}Training Epoch {self.epoch_idx}.")
             for ensemble_batches in train_buffer.batches(batch_size, self.ensemble.num_members):
                 model_in, target_out = list(zip(*[processor.process(b) for b in ensemble_batches]))
                 model_out = self.ensemble(model_in)
@@ -155,7 +156,7 @@ class EnsembleTrainer(object):
                 self.writer.add_scalar("train_batch/log_std_limit_loss", log_std_limit_loss.item(), self.train_batch_idx)
                 self.writer.add_scalar("train_batch/loss", loss_value, self.train_batch_idx)
 
-                if self.train_batch_idx % log_frequency == 0:
+                if not silent and self.train_batch_idx % log_frequency == 0:
                     logger.info(
                         f"{trial_id}Train Epoch #{self.epoch_idx} Batch #{self.train_batch_idx} Loss: {loss_value}")
 
@@ -168,7 +169,8 @@ class EnsembleTrainer(object):
             train_epoch_losses.append(train_epoch_loss)
             self.writer.add_scalar("train_epoch/loss", train_epoch_loss, self.epoch_idx)
 
-            logger.info(f"{trial_id}Validation Epoch {self.epoch_idx}.")
+            if not silent:
+                logger.info(f"{trial_id}Validation Epoch {self.epoch_idx}.")
             self.ensemble.eval()
             val_epoch_loss = 0.0
             val_batch_count = 0
@@ -185,7 +187,7 @@ class EnsembleTrainer(object):
                 self.writer.add_scalar("val_batch/log_std_limit_loss", log_std_limit_loss.item(), self.train_batch_idx)
                 self.writer.add_scalar("val_batch/loss", loss_value, self.val_batch_idx)
 
-                if self.val_batch_idx % log_frequency == 0:
+                if not silent and self.val_batch_idx % log_frequency == 0:
                     logger.info(f"{trial_id}Val Epoch #{self.epoch_idx} Batch #{self.val_batch_idx} Loss: {loss_value}")
 
                 val_epoch_loss += loss_value
@@ -294,13 +296,14 @@ def run_pets(args):
         dynamics_model.normalizer = normalizer
 
         def eval_func(actions):
-            return torch.tensor(dynamics_model_evaluation(state, dynamics_model, actions, num_particles))
+            actions_np = actions.detach().cpu().numpy()
+            return torch.tensor(dynamics_model_evaluation(state, dynamics_model, actions_np, num_particles))
 
         cem_opt = CEMOptimizer(num_samples, elite_size, horizon, num_iterations, lower_bound, upper_bound, alpha,
                                eval_func)
 
         trainer.fit(train_buffer, val_buffer, optimizer, processor, train_batch_size, train_epochs,
-                    log_frequency=train_log_frequency, trial_id=trial_idx)
+                    log_frequency=train_log_frequency, trial_id=trial_idx, silent=True)
         trial_length = 0
         trial_return = 0.0
 

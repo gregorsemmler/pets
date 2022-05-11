@@ -300,9 +300,11 @@ class EnsembleDynamicsModel(DynamicsModel):
 
         next_states = Normal(means, std_devs).sample().detach().cpu().numpy()
 
-        dones = np.array([self.env.is_done(s, n_s) for s, n_s in zip(states, next_states)])
-        rewards = np.array([self.env.reward(s, n_s, d) for s, n_s, d in zip(states, next_states, dones)])
-        return states, rewards, dones, {}
+        # dones = np.array([self.env.is_done(s, n_s) for s, n_s in zip(states, next_states)])
+        # rewards = np.array([self.env.reward(s, n_s, d) for s, n_s, d in zip(states, next_states, dones)])
+        dones = self.env.is_done(states, next_states)
+        rewards = self.env.reward(states, next_states, dones)
+        return next_states, rewards, dones, {}
 
 
 class EnsembleLinear(nn.Module):
