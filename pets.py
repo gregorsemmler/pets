@@ -283,7 +283,7 @@ def run_pets(args):
 
     trainer = EnsembleTrainer(ensemble, optimizer, writer)
 
-    num_trials = 2
+    num_trials = 5
     for trial_idx in range(num_trials):
         logger.info(f"Starting trial {trial_idx}.")
         state = env.reset()
@@ -326,6 +326,8 @@ def run_pets(args):
             action = np.clip(action, lower_bound_np, upper_bound_np)
             next_state, reward, done, info = env.step(action)
             replay_buffer.add(state, action, next_state, reward, done)
+
+            state = next_state
 
             trial_length += 1
 
