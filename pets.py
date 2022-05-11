@@ -15,7 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 from common import shift_numpy_array
 from data import ReplayBuffer, BatchProcessor, gauss_nll_ensemble_loss, SimpleBatchProcessor, StandardNormalizer
 from envs.cartpole_continuous import ContinuousCartPoleEnv
-from model import DynamicsModel, EnsembleDynamicsModel, MLPEnsemble, EnsembleMode, PolicyEnsemble, MLPEnsemble2
+from model import DynamicsModel, EnsembleDynamicsModel, EnsembleMode, PolicyEnsemble, MLPEnsemble
 from optimizer import CEMOptimizer
 
 logger = logging.getLogger(__name__)
@@ -233,8 +233,8 @@ def run_pets(args):
         device_token = args.device_token
 
     device = torch.device(device_token)
-    ensemble = MLPEnsemble2(state_dim, action_dim, num_ensemble_members, ensemble_mode=ensemble_mode,
-                            fully_params=fully_params, activation=activation).to(device)
+    ensemble = MLPEnsemble(state_dim, action_dim, num_ensemble_members, ensemble_mode=ensemble_mode,
+                           fully_params=fully_params, activation=activation).to(device)
     optimizer = Adam(ensemble.parameters(), lr=train_lr, weight_decay=l2_regularization)
     dynamics_model = EnsembleDynamicsModel(ensemble, env, device)
 
@@ -270,7 +270,8 @@ def run_pets(args):
         logger.info(f"Starting trial {trial_idx}.")
         state = env.reset()
         solution = initial_solution.clone()
-        # ensemble.shuffle_ids(num_samples * num_particles)  # Once per Trial for TSInf
+        if ensemble_mode == EnsembleMode.SHUFFLED_MEMBER:
+            ensemble.shuffle_ids(num_samples * num_particles)  # Once per Trial for TSInf
 
         train_buffer, val_buffer = replay_buffer.train_val_split(val_ratio=val_ratio, shuffle=shuffle)
         normalizer = get_normalizer_for_replay_buffer(train_buffer, device)
