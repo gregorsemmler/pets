@@ -1,5 +1,6 @@
 import argparse
 import logging
+import math
 from datetime import datetime
 from timeit import default_timer as timer
 
@@ -29,33 +30,11 @@ class DummySummaryWriter(object):
 PETS_ARG_PARSER = argparse.ArgumentParser()
 PETS_ARG_PARSER.add_argument("--device_token", default=None)
 PETS_ARG_PARSER.add_argument("--run_id", default=None)
+PETS_ARG_PARSER.add_argument("--num_trials", type=int, default=None)
+PETS_ARG_PARSER.add_argument("--max_steps", type=int, default=None)
 PETS_ARG_PARSER.add_argument("--tensorboardlog", dest="tensorboardlog", action="store_true")
 PETS_ARG_PARSER.add_argument("--no_tensorboardlog", dest="tensorboardlog", action="store_false")
 PETS_ARG_PARSER.set_defaults(tensorboardlog=False)
-
-
-def random_agent_evaluation():
-    env = ContinuousCartPoleEnv()
-    device_token = "cuda" if torch.cuda.is_available() else "cpu"
-    device = torch.device(device_token)
-    batch_size = 100
-    num_particles = 15
-    horizon = 10
-    state_dim = 4
-    action_dim = 1
-    num_ensemble_members = 5
-
-    env_state = env.reset()
-    actions = np.clip(np.random.randn(batch_size, horizon, action_dim), -1, 1).astype(np.float32)
-    ensemble = MLPEnsemble(state_dim, action_dim, num_ensemble_members, ensemble_mode=EnsembleMode.SHUFFLED_MEMBER).to(
-        device)
-    dynamics_model = EnsembleDynamicsModel(ensemble, env, device)
-
-    print("")
-    average_rewards = dynamics_model_evaluation(env_state, dynamics_model, actions, num_particles)
-
-    print("")
-    pass
 
 
 def dynamics_model_evaluation(initial_state, dynamics_model: DynamicsModel, horizon_actions, num_particles):
@@ -283,7 +262,10 @@ def run_pets(args):
 
     trainer = EnsembleTrainer(ensemble, optimizer, writer)
 
-    num_trials = 5
+    num_trials = 5 if args.num_trials is None else args.num_trials
+    silent_log = True
+    max_steps = math.inf if args.max_steps is None else args.max_steps
+
     for trial_idx in range(num_trials):
         logger.info(f"Starting trial {trial_idx}.")
         state = env.reset()
@@ -303,17 +285,19 @@ def run_pets(args):
                                eval_func)
 
         trainer.fit(train_buffer, val_buffer, optimizer, processor, train_batch_size, train_epochs,
-                    log_frequency=train_log_frequency, trial_id=trial_idx, silent=True)
+                    log_frequency=train_log_frequency, trial_id=trial_idx, silent=silent_log)
         trial_length = 0
         trial_return = 0.0
 
         while True:
-            # logger.info(f"Starting CEM Optimization for {num_iterations} iterations.")
-            # start = timer()
+            if not silent_log:
+                logger.info(f"Starting CEM Optimization for {num_iterations} iterations.")
+                start = timer()
 
             solution = cem_opt.optimize(solution)
 
-            # logger.info(f"Took {timer() - start:.3g} seconds.")
+            if not silent_log:
+                logger.info(f"Took {timer() - start:.3g} seconds.")
             solution_np = solution.detach().cpu().numpy()
             action = solution_np.squeeze()[0]
 
@@ -331,9 +315,14 @@ def run_pets(args):
 
             trial_length += 1
 
+            if trial_length >= max_steps:
+                logger.info(f"Maximum number of steps ({max_steps}) reached. Ending trial.")
+            end_trial = done or trial_length >= max_steps
+
             if not done:
                 trial_return = reward + trial_gamma * trial_return
-            else:
+
+            if end_trial:
                 trial_lengths.append(trial_length)
                 trial_returns.append(trial_return)
                 logger.info(f"Trial {trial_idx} over after {trial_length} steps with total return {trial_return}.")
@@ -350,7 +339,6 @@ def run_pets(args):
 
     logger.info(f"{num_trials} trials done.")
     logger.info(f"Best trial {best_trial_id} with return {best_trial_return} and length {best_trial_length}.")
-    print(trial_returns) # TODO
 
 
 if __name__ == "__main__":
