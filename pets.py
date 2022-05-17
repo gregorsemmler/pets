@@ -13,7 +13,8 @@ from torch.optim import Adam
 from torch.utils.tensorboard import SummaryWriter
 
 from common import shift_numpy_array
-from data import ReplayBuffer, BatchProcessor, gauss_nll_ensemble_loss, SimpleBatchProcessor, StandardNormalizer
+from data import ReplayBuffer, BatchProcessor, gauss_nll_ensemble_loss, SimpleBatchProcessor, StandardNormalizer, \
+    ensemble_loss
 from envs.cartpole_continuous import ContinuousCartPoleEnv
 from model import DynamicsModel, EnsembleDynamicsModel, EnsembleMode, PolicyEnsemble, MLPEnsemble
 from optimizer import CEMOptimizer
@@ -99,6 +100,24 @@ class EnsembleTrainer(object):
         self.val_batch_idx = 0
         self.epoch_idx = 0
 
+    def get_model_out(self, model_out):
+        if self.ensemble.predict_rewards:
+            means, log_stds, rewards, done_outs = model_out
+            nll_out = (means, log_stds)
+        else:
+            nll_out = model_out
+            rewards, done_outs = None, None
+        return nll_out, rewards, done_outs
+
+    def process_batches(self, processor, ensemble_batches):
+        processed_batches = [processor.process(b) for b in ensemble_batches]
+        if processor.process_rewards:
+            model_in, target_out, rewards, dones = list(zip(*processed_batches))
+        else:
+            model_in, target_out = list(zip(*processed_batches))
+            rewards, dones = None, None
+        return model_in, target_out, rewards, dones
+
     def fit(self, train_buffer: ReplayBuffer, val_buffer: ReplayBuffer, optimizer, processor: BatchProcessor,
             batch_size, num_epochs, log_frequency=100, trial_id=None, silent=False):
 
@@ -120,13 +139,27 @@ class EnsembleTrainer(object):
             if not silent:
                 logger.info(f"{trial_id}Training Epoch {self.epoch_idx}.")
             for ensemble_batches in train_buffer.batches(batch_size, self.ensemble.num_members):
-                model_in, target_out = list(zip(*[processor.process(b) for b in ensemble_batches]))
+                model_in, target_out, rewards, dones = self.process_batches(processor, ensemble_batches)
+
                 model_out = self.ensemble(model_in)
 
-                nll_loss = gauss_nll_ensemble_loss(model_out, target_out)
+                nll_out, reward_predictions, done_outs = self.get_model_out(model_out)
+
+                nll_loss = gauss_nll_ensemble_loss(nll_out, target_out)
                 # https://github.com/kchua/handful-of-trials/blob/77fd8802cc30b7683f0227c90527b5414c0df34c/dmbrl/modeling/models/BNN.py#L182
                 log_std_limit_loss = 0.02 * (self.ensemble.max_log_std.sum() - self.ensemble.min_log_std.sum())
                 total_loss = nll_loss + log_std_limit_loss
+
+                if rewards is not None:
+                    mse_loss = ensemble_loss(F.mse_loss, reward_predictions, rewards)
+                    self.writer.add_scalar("train_batch/mse_loss", mse_loss.item(), self.train_batch_idx)
+                    total_loss += mse_loss
+
+                if dones is not None:
+                    done_loss = ensemble_loss(F.binary_cross_entropy_with_logits, done_outs, dones)
+                    self.writer.add_scalar("train_batch/done_loss", done_loss.item(), self.train_batch_idx)
+                    total_loss += done_loss
+
                 optimizer.zero_grad()
                 total_loss.backward()
                 optimizer.step()
@@ -154,14 +187,30 @@ class EnsembleTrainer(object):
             val_epoch_loss = 0.0
             val_batch_count = 0
             for ensemble_batches in val_buffer.batches(batch_size, self.ensemble.num_members):
-                model_in, target_out = list(zip(*[processor.process(b) for b in ensemble_batches]))
+                model_in, target_out, rewards, dones = self.process_batches(processor, ensemble_batches)
+
                 with torch.no_grad():
                     model_out = self.ensemble(model_in)
 
-                nll_loss = gauss_nll_ensemble_loss(model_out, target_out)
+                nll_out, reward_predictions, done_outs = self.get_model_out(model_out)
+
+                nll_loss = gauss_nll_ensemble_loss(nll_out, target_out)
+
                 # https://github.com/kchua/handful-of-trials/blob/77fd8802cc30b7683f0227c90527b5414c0df34c/dmbrl/modeling/models/BNN.py#L182
                 log_std_limit_loss = 0.02 * (self.ensemble.max_log_std.sum() - self.ensemble.min_log_std.sum())
-                loss_value = nll_loss + log_std_limit_loss
+                total_loss = nll_loss + log_std_limit_loss
+
+                if rewards is not None:
+                    mse_loss = ensemble_loss(F.mse_loss, reward_predictions, rewards)
+                    self.writer.add_scalar("train_batch/mse_loss", mse_loss.item(), self.train_batch_idx)
+                    total_loss += mse_loss
+
+                if dones is not None:
+                    done_loss = ensemble_loss(F.binary_cross_entropy_with_logits, done_outs, dones)
+                    self.writer.add_scalar("train_batch/done_loss", done_loss.item(), self.train_batch_idx)
+                    total_loss += done_loss
+
+                loss_value = total_loss.item()
                 self.writer.add_scalar("val_batch/nll_loss", nll_loss.item(), self.train_batch_idx)
                 self.writer.add_scalar("val_batch/log_std_limit_loss", log_std_limit_loss.item(), self.train_batch_idx)
                 self.writer.add_scalar("val_batch/loss", loss_value, self.val_batch_idx)
@@ -176,7 +225,7 @@ class EnsembleTrainer(object):
 
             val_epoch_loss = 0.0 if val_batch_count == 0 else val_epoch_loss / val_batch_count
             val_epoch_losses.append(val_epoch_loss)
-            self.writer.add_scalar("val_epoch/loss", train_epoch_loss, self.epoch_idx)
+            self.writer.add_scalar("val_epoch/loss", val_epoch_loss, self.epoch_idx)
 
             self.epoch_idx += 1
 
@@ -224,6 +273,8 @@ def run_pets(args):
     num_ensemble_members = 5
     activation = "elu"
     fully_params = [200, 200, 200]
+    reward_params = [100, 100]
+    # reward_params = None
     # ensemble_mode = EnsembleMode.SHUFFLED_MEMBER
     ensemble_mode = EnsembleMode.FIXED_MEMBER
 
@@ -234,7 +285,7 @@ def run_pets(args):
 
     device = torch.device(device_token)
     ensemble = MLPEnsemble(state_dim, action_dim, num_ensemble_members, ensemble_mode=ensemble_mode,
-                           fully_params=fully_params, activation=activation).to(device)
+                           fully_params=fully_params, activation=activation, reward_params=reward_params).to(device)
     optimizer = Adam(ensemble.parameters(), lr=train_lr, weight_decay=l2_regularization)
     dynamics_model = EnsembleDynamicsModel(ensemble, env, device)
 
@@ -275,7 +326,7 @@ def run_pets(args):
 
         train_buffer, val_buffer = replay_buffer.train_val_split(val_ratio=val_ratio, shuffle=shuffle)
         normalizer = get_normalizer_for_replay_buffer(train_buffer, device)
-        processor = SimpleBatchProcessor(device, normalizer=normalizer)
+        processor = SimpleBatchProcessor(device, normalizer=normalizer, process_rewards=ensemble.predict_rewards)
         dynamics_model.normalizer = normalizer
 
         def eval_func(actions):

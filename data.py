@@ -44,13 +44,17 @@ class StandardNormalizer(Normalizer):
 
 class BatchProcessor(object):
 
+    def __init__(self, process_rewards=False):
+        self.process_rewards = process_rewards
+
     def process(self, batch: ModelBatch):
         raise NotImplementedError()
 
 
 class SimpleBatchProcessor(BatchProcessor):
 
-    def __init__(self, device, normalizer: Optional[Normalizer] = None, data_type=torch.float32):
+    def __init__(self, device, normalizer: Optional[Normalizer] = None, process_rewards=False, data_type=torch.float32):
+        super().__init__(process_rewards)
         self.device = device
         self.normalizer = normalizer
         self.data_type = data_type
@@ -65,7 +69,13 @@ class SimpleBatchProcessor(BatchProcessor):
         if self.normalizer is not None:
             model_in_t = self.normalizer.normalize(model_in_t)
 
-        return model_in_t, next_states_t
+        if not self.process_rewards:
+            return model_in_t, next_states_t
+
+        rewards_t = torch.from_numpy(batch.rewards).type(self.data_type).unsqueeze(-1).to(self.device)
+        dones_t = torch.from_numpy(batch.dones).type(self.data_type).unsqueeze(-1).to(self.device)
+
+        return model_in_t, next_states_t, rewards_t, dones_t
 
 
 class ReplayBuffer(object):
@@ -189,6 +199,17 @@ def gauss_nll_ensemble_loss(ensemble_out, targets):
     for mean_model, log_std_model, target in zip(ensemble_means, ensemble_log_stds, targets):
         var = torch.exp(2 * log_std_model)
         model_loss = F.gaussian_nll_loss(mean_model, target, var)
+        losses.append(model_loss)
+
+    total_loss = torch.stack(losses).mean()
+    return total_loss
+
+
+def ensemble_loss(loss_function, predictions, targets):
+    losses = []
+
+    for pred, target in zip(predictions, targets):
+        model_loss = loss_function(pred, target)
         losses.append(model_loss)
 
     total_loss = torch.stack(losses).mean()

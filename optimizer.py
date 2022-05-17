@@ -51,7 +51,5 @@ class CEMOptimizer(object):
             best_iter_val = best_values[0]
             if best_iter_val > best_value:
                 best_value = best_iter_val
-                best_solution = sampled[best_indices[0]]
-                # TODO don't keep track of best solution?
 
         return new_mean
