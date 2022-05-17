@@ -1,3 +1,4 @@
+from math import ceil
 from typing import Optional
 
 import numpy as np
@@ -78,6 +79,21 @@ class SimpleBatchProcessor(BatchProcessor):
         return model_in_t, next_states_t, rewards_t, dones_t
 
 
+def duplicate_samples(states, actions, next_states, rewards, dones, indices, repeat_factor):
+
+    def duplicate_samples(in_np):
+        tile_factor = (repeat_factor,) + (1,) * (in_np.ndim - 1)
+        return np.tile(in_np, tile_factor)
+
+    states_e = duplicate_samples(states[indices].copy())
+    actions_e = duplicate_samples(actions[indices].copy())
+    next_states_e = duplicate_samples(next_states[indices].copy())
+    rewards_e = duplicate_samples(rewards[indices].copy())
+    dones_e = duplicate_samples(dones[indices].copy())
+
+    return states_e, actions_e, next_states_e, rewards_e, dones_e
+
+
 class ReplayBuffer(object):
 
     def __init__(self, size, state_shape, action_shape, state_type=np.float32, action_type=np.float32,
@@ -154,12 +170,43 @@ class ReplayBuffer(object):
             yield model_batches
             start_idx = end_idx
 
-    def train_val_split(self, val_ratio=0.1, shuffle=True):
+    def train_val_split(self, val_ratio=0.1, shuffle=True, balance_classes=False):
         states_c = self.states[:self.num_stored, ...].copy()
         actions_c = self.actions[:self.num_stored, ...].copy()
         next_states_c = self.next_states[:self.num_stored, ...].copy()
         rewards_c = self.rewards[:self.num_stored, ...].copy()
         dones_c = self.dones[:self.num_stored, ...].copy()
+
+        if balance_classes:
+            done_indices = np.where(dones_c)[0]
+            not_done_indices = np.where(~dones_c)[0]
+            len_done = len(done_indices)
+            len_not_done = len(not_done_indices)
+
+            if len_done > 0 and len_not_done > 0:
+                duplicate_dones = len_done < len_not_done
+                duplicate_indices = done_indices if duplicate_dones else not_done_indices
+                dup_length, not_dup_length = (len_done, len_not_done) \
+                    if duplicate_dones else (len_not_done, len_done)
+
+                factor = ceil((not_dup_length / dup_length) - 1.0)
+
+                print(f"{len(duplicate_indices)} of {self.num_stored} are done, oversampling by factor {factor}.")
+
+                s_e, a_e, n_s_e, r_e, d_e = duplicate_samples(states_c, actions_c, next_states_c, rewards_c, dones_c,
+                                                              duplicate_indices, factor)
+
+                s_e = s_e[:not_dup_length]
+                a_e = a_e[:not_dup_length]
+                n_s_e = n_s_e[:not_dup_length]
+                r_e = r_e[:not_dup_length]
+                d_e = d_e[:not_dup_length]
+
+                states_c = np.concatenate([states_c, s_e])
+                actions_c = np.concatenate([actions_c, a_e])
+                next_states_c = np.concatenate([next_states_c, n_s_e])
+                rewards_c = np.concatenate([rewards_c, r_e])
+                dones_c = np.concatenate([dones_c, d_e])
 
         val_size = int(val_ratio * self.num_stored)
 

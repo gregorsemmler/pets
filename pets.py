@@ -275,6 +275,7 @@ def run_pets(args):
     fully_params = [200, 200, 200]
     reward_params = [100, 100]
     # reward_params = None
+    balance_classes = reward_params is not None
     # ensemble_mode = EnsembleMode.SHUFFLED_MEMBER
     ensemble_mode = EnsembleMode.FIXED_MEMBER
 
@@ -324,7 +325,8 @@ def run_pets(args):
         if ensemble_mode == EnsembleMode.SHUFFLED_MEMBER:
             ensemble.shuffle_ids(num_samples * num_particles)  # Once per Trial for TSInf
 
-        train_buffer, val_buffer = replay_buffer.train_val_split(val_ratio=val_ratio, shuffle=shuffle)
+        train_buffer, val_buffer = replay_buffer.train_val_split(val_ratio=val_ratio, shuffle=shuffle,
+                                                                 balance_classes=balance_classes)
         normalizer = get_normalizer_for_replay_buffer(train_buffer, device)
         processor = SimpleBatchProcessor(device, normalizer=normalizer, process_rewards=ensemble.predict_rewards)
         dynamics_model.normalizer = normalizer
