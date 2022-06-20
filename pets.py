@@ -33,6 +33,7 @@ PETS_ARG_PARSER.add_argument("--device_token", default=None)
 PETS_ARG_PARSER.add_argument("--run_id", default=None)
 PETS_ARG_PARSER.add_argument("--num_trials", type=int, default=None)
 PETS_ARG_PARSER.add_argument("--max_steps", type=int, default=None)
+PETS_ARG_PARSER.add_argument("--done_threshold", type=float, default=0.5)
 PETS_ARG_PARSER.add_argument("--tensorboardlog", dest="tensorboardlog", action="store_true")
 PETS_ARG_PARSER.add_argument("--no_tensorboardlog", dest="tensorboardlog", action="store_false")
 PETS_ARG_PARSER.set_defaults(tensorboardlog=False)
@@ -278,6 +279,7 @@ def run_pets(args):
     balance_classes = reward_params is not None
     # ensemble_mode = EnsembleMode.SHUFFLED_MEMBER
     ensemble_mode = EnsembleMode.FIXED_MEMBER
+    done_th = args.done_threshold
 
     if args.device_token is None:
         device_token = "cuda" if torch.cuda.is_available() else "cpu"
@@ -288,7 +290,7 @@ def run_pets(args):
     ensemble = MLPEnsemble(state_dim, action_dim, num_ensemble_members, ensemble_mode=ensemble_mode,
                            fully_params=fully_params, activation=activation, reward_params=reward_params).to(device)
     optimizer = Adam(ensemble.parameters(), lr=train_lr, weight_decay=l2_regularization)
-    dynamics_model = EnsembleDynamicsModel(ensemble, env, device)
+    dynamics_model = EnsembleDynamicsModel(ensemble, env, device, done_threshold=done_th)
 
     # CEM Options
     num_samples = 500

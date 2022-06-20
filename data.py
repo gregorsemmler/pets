@@ -1,9 +1,12 @@
+import logging
 from math import ceil
 from typing import Optional
 
 import numpy as np
 import torch
 from torch.nn import functional as F
+
+logger = logging.getLogger(__name__)
 
 
 class ModelBatch(object):
@@ -191,7 +194,7 @@ class ReplayBuffer(object):
 
                 factor = ceil((not_dup_length / dup_length) - 1.0)
 
-                print(f"{len(duplicate_indices)} of {self.num_stored} are done, oversampling by factor {factor}.")
+                logger.info(f"{len(duplicate_indices)} of {self.num_stored} are done, oversampling by factor {factor}.")
 
                 s_e, a_e, n_s_e, r_e, d_e = duplicate_samples(states_c, actions_c, next_states_c, rewards_c, dones_c,
                                                               duplicate_indices, factor)
