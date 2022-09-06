@@ -46,7 +46,7 @@ def dynamics_model_evaluation(initial_state, dynamics_model: DynamicsModel, hori
     done_envs = np.zeros((batch_size * num_particles, ), dtype=bool)
     for time_step in range(horizon):
         action = horizon_actions[:, time_step, :]
-        actions = np.repeat(action, num_particles)[:, np.newaxis]
+        actions = np.repeat(action, num_particles, axis=0)
         with torch.no_grad():
             states, rewards, dones, _ = dynamics_model.step(states, actions)
         rewards[done_envs] = 0.0
