@@ -110,7 +110,8 @@ def train(config=None):
 
     with torch.no_grad():
         model_out = ensemble([x_t for _ in range(num_ensemble_members)])
-        means, log_stds = list(zip(*model_out))
+        # means, log_stds = list(zip(*model_out))
+        means, log_stds = model_out
         np_means = [m.cpu().numpy().squeeze() for m in means]
         np_stds = [np.exp(log_s.cpu().numpy()).squeeze() for log_s in log_stds]
         print("")
@@ -119,11 +120,13 @@ def train(config=None):
     ensemble_mean_std = np.stack(np_means).std(axis=0)
     ensemble_std = np.stack(np_stds).mean(axis=0)
     std_average = np.stack([ensemble_mean_std, ensemble_std]).mean(axis=0)
+    std_combined = np.sqrt(np.square(ensemble_mean_std) + np.square(ensemble_std))
 
     plt.figure(figsize=(16, 12), dpi=100)
     plt.plot(orig_x, orig_y, "b", orig_x, pred_y, "r")
     plt.plot(x, y, ".g", alpha=0.2)
-    plt.fill_between(orig_x, pred_y - std_average, pred_y + std_average, color="r", alpha=0.2)
+    plt.fill_between(orig_x, pred_y - std_combined, pred_y + std_combined, color="r", alpha=0.2)
+    # plt.fill_between(orig_x, pred_y - std_average, pred_y + std_average, color="r", alpha=0.2)
     # plt.fill_between(orig_x, pred_y - ensemble_std, pred_y + ensemble_std, color="k", alpha=0.2)
     # plt.fill_between(orig_x, pred_y - ensemble_mean_std, pred_y + ensemble_mean_std, color="m", alpha=0.2)
     plt.show()
