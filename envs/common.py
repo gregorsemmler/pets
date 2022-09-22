@@ -29,6 +29,6 @@ class RewardFuncEnv(gym.Env):
         Returns whether the environment is done when transitioning from one state to the next.
         :param state: the current state.
         :param new_state: the next state.
-        :return: a bool indicating whether or not the environment is done.
+        :return: a bool indicating whether the environment is done.
         """
         raise NotImplementedError()
